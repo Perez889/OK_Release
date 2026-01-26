@@ -42,16 +42,33 @@ def send_all_apks():
         print("警告：未设置 GITHUB_TOKEN，使用匿名请求，容易被限速")
 
     try:
+        print("准备发送请求到:", GITHUB_API_URL)
+        print("请求 headers:", headers)
         resp = requests.get(GITHUB_API_URL, headers=headers, timeout=20)
         print(f"GitHub API 响应码: {resp.status_code}")
-        print(f"响应内容预览: {resp.text[:200]}...")  # 打印前200字符调试
+        print(f"响应头预览: {dict(resp.headers)}")
+        print(f"响应内容前300字符: {resp.text[:300]}...")
         resp.raise_for_status()
         files = resp.json()
-    except Exception as e:
-        print(f"获取 GitHub 失败: {str(e)}")
-        print(f"完整错误栈: {traceback.format_exc()}")
+        print("API 请求成功，解析 JSON...")
+    except requests.exceptions.Timeout:
+        print("请求超时 (TimeoutError)")
+        print(traceback.format_exc())
+        return
+    except requests.exceptions.ConnectionError:
+        print("连接失败 (ConnectionError)")
+        print(traceback.format_exc())
+        return
+    except requests.exceptions.HTTPError as http_err:
+        print(f"HTTP 错误: {http_err}")
         if 'resp' in locals():
+            print(f"状态码: {resp.status_code}")
             print(f"响应文本: {resp.text}")
+        print(traceback.format_exc())
+        return
+    except Exception as e:
+        print(f"其他异常: {str(e)}")
+        print(traceback.format_exc())
         return
 
     apks = [f for f in files if f.get('type') == 'file' and f['name'].lower().endswith('.apk')]
