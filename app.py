@@ -2,16 +2,21 @@ import os
 import time
 import threading
 import requests
+import traceback  # 加这个打印完整错误栈
 from flask import Flask
 from telegram import Bot, InputFile
 from telegram.error import TelegramError, RetryAfter
 
 app = Flask(__name__)
 
-# ==================== 配置（优先从环境变量读取） ====================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8536915783:AAE-UrQYYlpsUJ4Syho0zSGUMKifTdjRlLU")
-BASE_URL = os.getenv("BASE_URL", "https://prominent-tootsie-apkrelease-1850e28f.koyeb.app/bot")
-CHANNEL_ID = os.getenv("CHANNEL_ID", "@你的频道用户名")  # 必须改成你的真实频道
+# ==================== 配置（强制从环境变量读取，移除默认值） ====================
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+BASE_URL = os.getenv("BASE_URL")
+CHANNEL_ID = os.getenv("CHANNEL_ID")
+
+if not all([BOT_TOKEN, BASE_URL, CHANNEL_ID]):
+    print("错误：缺少环境变量 BOT_TOKEN / BASE_URL / CHANNEL_ID")
+    exit(1)
 
 GITHUB_REPO = "FongMi/Release"
 BRANCH = "fongmi"
@@ -38,18 +43,20 @@ def send_all_apks():
 
     try:
         resp = requests.get(GITHUB_API_URL, headers=headers, timeout=20)
-        print(f"GitHub API 响应码: {resp.status_code}")  # 调试用
+        print(f"GitHub API 响应码: {resp.status_code}")
+        print(f"响应内容预览: {resp.text[:200]}...")  # 打印前200字符调试
         resp.raise_for_status()
         files = resp.json()
     except Exception as e:
         print(f"获取 GitHub 失败: {str(e)}")
+        print(f"完整错误栈: {traceback.format_exc()}")
         if 'resp' in locals():
             print(f"响应文本: {resp.text}")
         return
 
     apks = [f for f in files if f.get('type') == 'file' and f['name'].lower().endswith('.apk')]
     if not apks:
-        print("未找到 APK")
+        print("未找到 APK 文件")
         return
 
     print(f"找到 {len(apks)} 个 APK: {[f['name'] for f in apks]}")
@@ -73,13 +80,14 @@ def send_all_apks():
             )
 
             print(f"成功发送: {name}")
-            time.sleep(8)  # 防 Telegram 限速
+            time.sleep(8)  # 防限速
 
         except RetryAfter as ra:
-            print(f"限速，等待 {ra.retry_after + 10} 秒")
+            print(f"Telegram 限速，等待 {ra.retry_after + 10} 秒")
             time.sleep(ra.retry_after + 10)
         except Exception as e:
-            print(f"失败 {name}: {e}")
+            print(f"发送失败 {name}: {str(e)}")
+            print(f"错误栈: {traceback.format_exc()}")
 
 def background_loop():
     while True:
@@ -94,7 +102,6 @@ def health():
 
 if __name__ == "__main__":
     print("启动 APK 推送服务...")
-    # 启动后台推送线程
     threading.Thread(target=background_loop, daemon=True).start()
     port = int(os.getenv("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
