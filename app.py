@@ -25,12 +25,26 @@ bot = Bot(token=BOT_TOKEN, base_url=BASE_URL)
 
 def send_all_apks():
     print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 开始检查 APK...")
+    
+    headers = {
+        'User-Agent': 'Render-APK-Pusher/1.0'
+    }
+    if os.getenv("GITHUB_TOKEN"):
+        headers['Authorization'] = f"token {os.getenv('GITHUB_TOKEN')}"
+        headers['Accept'] = "application/vnd.github.v3+json"
+        print("使用 GitHub Token 认证（匿名限速已绕过）")
+    else:
+        print("警告：未设置 GITHUB_TOKEN，使用匿名请求，容易被限速")
+
     try:
-        resp = requests.get(GITHUB_API_URL, timeout=20)
+        resp = requests.get(GITHUB_API_URL, headers=headers, timeout=20)
+        print(f"GitHub API 响应码: {resp.status_code}")  # 调试用
         resp.raise_for_status()
         files = resp.json()
     except Exception as e:
-        print(f"获取 GitHub 失败: {e}")
+        print(f"获取 GitHub 失败: {str(e)}")
+        if 'resp' in locals():
+            print(f"响应文本: {resp.text}")
         return
 
     apks = [f for f in files if f.get('type') == 'file' and f['name'].lower().endswith('.apk')]
