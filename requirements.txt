@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: fongmi-apk-pusher
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: BOT_TOKEN
+        sync: false  # 稍后手动填
+      - key: BASE_URL
+        value: https://prominent-tootsie-apkrelease-1850e28f.koyeb.app/bot
+      - key: CHANNEL_ID
+        sync: false
