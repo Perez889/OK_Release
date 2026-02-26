@@ -8,7 +8,6 @@ on:
 jobs:
   update:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -18,32 +17,39 @@ jobs:
           sudo apt update
           sudo apt install -y wget curl jq
 
-      - name: Detect latest version by probing
+      - name: Detect latest version (safe probe 3.x only)
         run: |
           BASE="https://jolly-morning-15a8.wuethan89.workers.dev/OK%E5%BD%B1%E8%A7%86/OK%E5%BD%B1%E8%A7%86%E6%A0%87%E5%87%86%E7%89%88"
+          echo "开始探测版本号 (限制在 3.x 系列)..."
+          LATEST="3.0.0"
 
-          echo "开始探测版本号..."
-
-          LATEST="0.0.0"
-
-          for major in {3..9}; do
-            for minor in {0..9}; do
-              for patch in {0..9}; do
-                V="${major}.${minor}.${patch}"
-                URL="$BASE/$V/%E6%A0%87%E5%87%86%E7%89%88${V}.txt"
-
-                STATUS=$(curl -o /dev/null -s -w "%{http_code}" "$URL")
-
-                if [ "$STATUS" = "200" ]; then
-                  echo "发现版本：$V"
+          for minor in {0..9}; do
+            for patch in {0..9}; do
+              V="3.${minor}.${patch}"
+              URL="$BASE/$V/%E6%A0%87%E5%87%86%E7%89%88${V}.txt"
+              
+              echo "检查: $V → $URL"
+              
+              # 使用 HEAD 请求 + 超时 + 重试，获取状态码
+              STATUS=$(curl -s -I --max-time 8 --retry 2 --retry-delay 1 -w "%{http_code}" -o /dev/null "$URL")
+              
+              if [ "$STATUS" = "200" ]; then
+                # 获取 Content-Length
+                SIZE=$(curl -sI --max-time 8 "$URL" | grep -i '^Content-Length:' | awk '{print $2}' | tr -d '\r')
+                SIZE=${SIZE:-0}
+                
+                if [ "$SIZE" -gt 1000 ]; then  # 假设版本文件至少1KB以上才算有效
+                  echo "有效版本发现：$V (大小约 ${SIZE} bytes)"
                   LATEST="$V"
+                else
+                  echo "跳过假/空响应：$V (大小 ${SIZE} bytes)"
                 fi
-              done
+              fi
             done
           done
 
-          if [ "$LATEST" = "0.0.0" ]; then
-            echo "未找到任何版本，退出"
+          if [ "$LATEST" = "3.0.0" ]; then
+            echo "在 3.x 系列中未找到任何有效版本，退出。"
             exit 1
           fi
 
@@ -55,18 +61,24 @@ jobs:
         run: |
           if [ -f last_version.txt ]; then
             LAST=$(cat last_version.txt)
+            echo "上次版本：$LAST"
             if [ "$LAST" = "$LATEST_VERSION" ]; then
               echo "版本未变化，退出。"
               exit 0
+            else
+              echo "检测到新版本：$LATEST_VERSION (旧版 $LAST)"
             fi
+          else
+            echo "首次运行，无上次版本记录"
           fi
 
       - name: Download APK files
+        if: success()  # 只在新版本时执行
         run: |
           BASE_URL="https://jolly-morning-15a8.wuethan89.workers.dev/OK%E5%BD%B1%E8%A7%86/OK%E5%BD%B1%E8%A7%86%E6%A0%87%E5%87%86%E7%89%88/$LATEST_VERSION/"
           mkdir -p downloads
           cd downloads
-
+          
           declare -a FILES=(
             "海信专版-OK影视-$LATEST_VERSION.apk"
             "leanback-arm64_v8a-$LATEST_VERSION.apk"
@@ -74,34 +86,64 @@ jobs:
             "mobile-arm64_v8a-$LATEST_VERSION.apk"
             "mobile-armeabi_v7a-$LATEST_VERSION.apk"
           )
-
+          
+          DOWNLOADED=false
           for f in "${FILES[@]}"; do
-            echo "下载 $f"
-            wget -q "${BASE_URL}${f}"
+            FILE_URL="${BASE_URL}${f}"
+            echo "尝试下载: $f"
+            if wget -q --timeout=10 --tries=2 "$FILE_URL"; then
+              if [ -s "$f" ]; then
+                echo "下载成功: $f"
+                DOWNLOADED=true
+              else
+                echo "文件为空，删除: $f"
+                rm -f "$f"
+              fi
+            else
+              echo "下载失败: $f"
+            fi
           done
+          
+          if [ "$DOWNLOADED" = false ]; then
+            echo "没有下载到任何有效 APK 文件，可能是路径错误或文件不存在"
+            exit 1
+          fi
 
       - name: Upload to Telegram
+        if: success()
         env:
           TELEGRAM_API_BASE: ${{ secrets.TELEGRAM_API_BASE }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
         run: |
           cd downloads
-
-          MESSAGE="📢 OK影视 新版本发布\n版本：${LATEST_VERSION}\n\n更新日志：无（未提供）"
-
-          curl -s -X POST "$TELEGRAM_API_BASE/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
-            -d chat_id="$TELEGRAM_CHANNEL_ID" \
-            -d text="$MESSAGE"
-
-          for f in *.apk; do
-            curl -s -X POST "$TELEGRAM_API_BASE/bot$TELEGRAM_BOT_TOKEN/sendDocument" \
-              -F chat_id="$TELEGRAM_CHANNEL_ID" \
-              -F document=@"$f" \
-              -F caption="$f"
-          done
+          
+          if ls *.apk >/dev/null 2>&1; then
+            MESSAGE="📢 OK影视 新版本发布\n版本：${LATEST_VERSION}\n\n更新日志：无（未提供）\n\n已上传以下安装包："
+            for f in *.apk; do
+              MESSAGE="$MESSAGE\n- $f"
+            done
+            
+            curl -s -X POST "$TELEGRAM_API_BASE/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+              -d chat_id="$TELEGRAM_CHANNEL_ID" \
+              -d text="$MESSAGE"
+            
+            for f in *.apk; do
+              curl -s -X POST "$TELEGRAM_API_BASE/bot$TELEGRAM_BOT_TOKEN/sendDocument" \
+                -F chat_id="$TELEGRAM_CHANNEL_ID" \
+                -F document=@"$f" \
+                -F caption="$f (OK影视 $LATEST_VERSION)"
+            done
+          else
+            echo "无 APK 文件可上传，跳过 Telegram 发送"
+          fi
 
       - name: Save new version
+        if: success()
         run: |
           cp latest_version.txt last_version.txt
-          git config user.name "github-actions
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add last_version.txt
+          git commit -m "更新版本号到 $LATEST_VERSION" || echo "无变更，跳过 commit"
+          git push || echo "推送失败（可能是无变更或权限问题）"
