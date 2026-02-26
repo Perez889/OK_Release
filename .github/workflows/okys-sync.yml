@@ -85,9 +85,8 @@ jobs:
 
           update_time=$(TZ=Asia/Shanghai date '+%Y/%m/%d %H:%M')
 
-          # 去掉 emoji
           safe_caption=$(
-            printf "\n\n- 本次更新：\n%s\n\n- 当前版本：%s\n- 更新时间：%s" \
+            printf "OK影视更新发布\n\n- 本次更新：\n%s\n\n- 当前版本：%s\n- 更新时间：%s" \
               "$merged_logs" "$LATEST_VERSION" "$update_time"
           )
 
@@ -119,15 +118,14 @@ jobs:
         run: |
           set -e
 
-          # 转义 caption 里的特殊字符和换行
           ESCAPED_CAPTION=$(echo "$caption" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))')
 
           media_json=$(cat <<EOF
 [{"type":"document","media":"attach://hisense-tv-customized-ok.apk"},
- {"type":"document","media":"attach://leanback-arm64_v8a-ok.apk"},
- {"type":"document","media":"attach://leanback-armeabi_v7a-ok.apk"},
- {"type":"document","media":"attach://mobile-arm64_v8a-ok.apk"},
- {"type":"document","media":"attach://mobile-armeabi_v7a-ok.apk","caption":$ESCAPED_CAPTION}]
+{"type":"document","media":"attach://leanback-arm64_v8a-ok.apk"},
+{"type":"document","media":"attach://leanback-armeabi_v7a-ok.apk"},
+{"type":"document","media":"attach://mobile-arm64_v8a-ok.apk"},
+{"type":"document","media":"attach://mobile-armeabi_v7a-ok.apk","caption":$ESCAPED_CAPTION}]
 EOF
 )
 
