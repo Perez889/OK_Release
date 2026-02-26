@@ -1,4 +1,116 @@
-     name: Upload to Telegram
+name: OK影视自动更新
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Install tools
+        run: |
+          sudo apt update
+          sudo apt install -y wget curl jq
+
+      - name: Detect latest version
+        run: |
+          BASE="https://op.ll.dovx.cf/OK影视/OK影视标准版"
+
+          START_MAJOR=3
+          START_MINOR=7
+          START_PATCH=0
+
+          LATEST_VERSION=""
+
+          echo "开始从 3.7.0 探测版本..."
+
+          for PATCH in $(seq $START_PATCH 20); do
+            VERSION="${START_MAJOR}.${START_MINOR}.${PATCH}"
+            URL="${BASE}/${VERSION}/标准版${VERSION}.txt"
+
+            echo "探测版本：$VERSION"
+
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL")
+
+            if [ "$STATUS" = "200" ]; then
+              echo "发现版本存在：$VERSION"
+              LATEST_VERSION="$VERSION"
+            else
+              echo "版本不存在：$VERSION"
+              break
+            fi
+          done
+
+          if [ -z "$LATEST_VERSION" ]; then
+            echo "未找到任何版本，退出"
+            exit 1
+          fi
+
+          echo "最终最新版本：$LATEST_VERSION"
+          echo "$LATEST_VERSION" > latest_version.txt
+          echo "LATEST_VERSION=$LATEST_VERSION" >> $GITHUB_ENV
+
+      - name: Compare version
+        run: |
+          if [ -f last_version.txt ]; then
+            LAST=$(cat last_version.txt)
+            if [ "$LAST" = "$LATEST_VERSION" ]; then
+              echo "版本未变化，退出。"
+              exit 0
+            fi
+          fi
+
+      - name: 获取更新日志
+        run: |
+          LOG_URL="https://op.ll.dovx.cf/OK影视/OK影视标准版/${LATEST_VERSION}/标准版${LATEST_VERSION}.txt"
+
+          echo "下载更新日志：$LOG_URL"
+
+          LOG_CONTENT=$(curl -s "$LOG_URL")
+
+          if [ -z "$LOG_CONTENT" ]; then
+            LOG_CONTENT="暂无更新日志"
+          fi
+
+          CLEAN_LOG=$(echo "$LOG_CONTENT" | sed '/^$/d' | sed 's/^/• /g')
+
+          UPDATE_TIME=$(TZ=Asia/Shanghai date '+%Y/%m/%d %H:%M')
+
+          CAPTION=$(printf "📢 OK影视新版本发布\n\n- 本次更新：\n%s\n\n- 当前版本：%s\n- 更新时间：%s" \
+            "$CLEAN_LOG" "$LATEST_VERSION" "$UPDATE_TIME")
+
+          {
+            echo "CAPTION<<EOF"
+            echo "$CAPTION"
+            echo "EOF"
+          } >> $GITHUB_ENV
+
+      - name: Download APK files
+        run: |
+          BASE="https://op.ll.dovx.cf/OK影视/OK影视标准版/$LATEST_VERSION/"
+          mkdir -p downloads
+          cd downloads
+
+          declare -a FILES=(
+            "海信专版-OK影视-$LATEST_VERSION.apk"
+            "leanback-arm64_v8a-$LATEST_VERSION.apk"
+            "leanback-armeabi_v7a-$LATEST_VERSION.apk"
+            "mobile-arm64_v8a-$LATEST_VERSION.apk"
+            "mobile-armeabi_v7a-$LATEST_VERSION.apk"
+          )
+
+          for f in "${FILES[@]}"; do
+            echo "下载 $f"
+            wget -q "${BASE}${f}"
+          done
+
+      - name: Upload to Telegram
         env:
           TELEGRAM_API_BASE: ${{ secrets.TELEGRAM_API_BASE }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -6,58 +118,31 @@
         run: |
           cd downloads
 
-          # 1. 获取 OK 影视 txt 更新日志
-          TXT_URL="https://op.ll.dovx.cf/OK影视/OK影视标准版/${LATEST_VERSION}/标准版${LATEST_VERSION}.txt"
-          echo "获取更新日志：$TXT_URL"
+          FILE_LIST=(*.apk)
+          LAST_INDEX=$((${#FILE_LIST[@]} - 1))
 
-          if ! curl -s -f "$TXT_URL" -o changelog.txt; then
-            echo "获取更新日志失败，使用默认文案"
-            echo "暂无更新说明（txt 获取失败）" > changelog.txt
-          fi
+          for i in "${!FILE_LIST[@]}"; do
+            f="${FILE_LIST[$i]}"
+            echo "上传 $f"
 
-          changelog=$(cat changelog.txt)
-          update_time=$(TZ=Asia/Shanghai date '+%Y/%m/%d %H:%M')
-
-          caption=$(
-            printf "📢 OK影视 新版本发布\n\n- 当前版本：%s\n- 更新时间：%s\n\n📄 更新内容：\n%s" \
-              "$LATEST_VERSION" "$update_time" "$changelog"
-          )
-
-          echo "Caption:"
-          echo "$caption"
-
-          # 2. 准备文件列表
-          files=( *.apk )
-          total=${#files[@]}
-
-          # 3. 构造 sendMediaGroup 的 media JSON，caption 只放在最后一个
-          media_json="["
-          for i in "${!files[@]}"; do
-            f="${files[$i]}"
-            attach_name="file$((i+1))"
-
-            if [ "$i" -eq $((total - 1)) ]; then
-              # 最后一个文件带 caption
-              media_json+='{"type":"document","media":"attach://'"$attach_name"'","caption":"'"'"$caption"'"'" }'
+            if [ "$i" -eq "$LAST_INDEX" ]; then
+              echo "这是最后一个文件，附带更新日志"
+              curl -s -X POST "$TELEGRAM_API_BASE/bot$TELEGRAM_BOT_TOKEN/sendDocument" \
+                -F chat_id="$TELEGRAM_CHANNEL_ID" \
+                -F document=@"$f" \
+                -F caption="$CAPTION"
             else
-              # 前面的文件不带 caption
-              media_json+='{"type":"document","media":"attach://'"$attach_name"'"}'
-            fi
-
-            if [ "$i" -lt $((total - 1)) ]; then
-              media_json+=","
+              curl -s -X POST "$TELEGRAM_API_BASE/bot$TELEGRAM_BOT_TOKEN/sendDocument" \
+                -F chat_id="$TELEGRAM_CHANNEL_ID" \
+                -F document=@"$f"
             fi
           done
-          media_json+="]"
 
-          echo "media_json = $media_json"
-
-          # 4. 发送媒体组
-          curl -s -X POST "$TELEGRAM_API_BASE/bot$TELEGRAM_BOT_TOKEN/sendMediaGroup" \
-            -F chat_id="$TELEGRAM_CHANNEL_ID" \
-            -F media="$media_json" \
-          $(for i in "${!files[@]}"; do
-              f="${files[$i]}"
-              attach_name="file$((i+1))"
-              printf ' -F %s=@%s' "$attach_name" "$f"
-            done)
+      - name: Save new version
+        run: |
+          cp latest_version.txt last_version.txt
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add last_version.txt
+          git commit -m "更新版本号到 $LATEST_VERSION" || echo "无变更"
+          git push || echo "无需推送"
