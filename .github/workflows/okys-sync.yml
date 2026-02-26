@@ -21,7 +21,6 @@ jobs:
       - name: Detect latest version
         run: |
           BASE="https://op.ll.dovx.cf/OK影视/OK影视标准版"
-
           START_MAJOR=3
           START_MINOR=7
           START_PATCH=0
@@ -34,8 +33,8 @@ jobs:
             URL="${BASE}/${VERSION}/标准版${VERSION}.txt"
 
             CONTENT=$(curl -s "$URL")
-
-            if [ -n "$CONTENT" ]; then
+            if [ -n "$CONTENT" ] && [ "$(echo "$CONTENT" | wc -c)" -gt 10 ]; then
+              echo "发现真实版本：$VERSION"
               LATEST_VERSION="$VERSION"
               FOUND_FIRST="true"
             else
@@ -50,8 +49,9 @@ jobs:
             exit 1
           fi
 
-          echo "LATEST_VERSION=$LATEST_VERSION" >> $GITHUB_ENV
+          echo "最终最新版本：$LATEST_VERSION"
           echo "$LATEST_VERSION" > latest_version.txt
+          echo "LATEST_VERSION=$LATEST_VERSION" >> $GITHUB_ENV
 
       - name: Compare version
         id: check
@@ -60,6 +60,7 @@ jobs:
             LAST=$(cat last_version.txt)
             if [ "$LAST" = "$LATEST_VERSION" ]; then
               echo "changed=false" >> $GITHUB_OUTPUT
+              echo "版本未变化"
               exit 0
             fi
           fi
@@ -69,7 +70,6 @@ jobs:
         if: steps.check.outputs.changed == 'true'
         run: |
           LOG_URL="https://op.ll.dovx.cf/OK影视/OK影视标准版/${LATEST_VERSION}/标准版${LATEST_VERSION}.txt"
-
           raw_log=$(curl -s "$LOG_URL")
 
           if [ -z "$raw_log" ]; then
@@ -118,11 +118,6 @@ jobs:
         run: |
           set -e
 
-          if [ -z "${caption+x}" ]; then
-            echo "caption 变量不存在"
-            exit 1
-          fi
-
           for f in \
             "hisense-tv-customized-ok.apk" \
             "leanback-arm64_v8a-ok.apk" \
@@ -135,6 +130,7 @@ jobs:
             fi
           done
 
+          # jq -c 确保 JSON 单行
           media_json=$(jq -cn \
             --arg cap "$caption" \
             '[
@@ -143,7 +139,7 @@ jobs:
               {"type":"document","media":"attach://leanback-armeabi_v7a-ok.apk"},
               {"type":"document","media":"attach://mobile-arm64_v8a-ok.apk"},
               {"type":"document","media":"attach://mobile-armeabi_v7a-ok.apk","caption":$cap}
-            ]')
+            ]' | jq -c .)
 
           response=$(curl -s -X POST "$BOT_API_BASE/bot$BOT_TOKEN/sendMediaGroup" \
             -F chat_id="$CHAT_ID" \
