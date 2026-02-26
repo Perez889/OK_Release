@@ -1,4 +1,4 @@
-      - name: Upload to Telegram
+     name: Upload to Telegram
         env:
           TELEGRAM_API_BASE: ${{ secrets.TELEGRAM_API_BASE }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
