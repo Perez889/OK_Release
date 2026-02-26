@@ -18,23 +18,41 @@ jobs:
           sudo apt update
           sudo apt install -y wget curl jq
 
-      - name: Fetch version list from source site
+      - name: Detect latest version
         run: |
-          # 源站目录（必须用源站，因为 Worker 无法代理目录）
-          BASE_URL_SRC="https://op.ll.dovx.cf/OK%E5%BD%B1%E8%A7%86/OK%E5%BD%B1%E8%A7%86%E6%A0%87%E5%87%86%E7%89%88"
+          BASE="https://autumn-dev-a340.wuethan89.workers.dev/OK影视/OK影视标准版"
 
-          echo "获取目录列表..."
-          curl -s "$BASE_URL_SRC" -o list.html
+          START_MAJOR=3
+          START_MINOR=7
+          START_PATCH=0
 
-          # 提取版本号目录（例如 3.7.0）
-          grep -oP '(?<=href=")[0-9]+\.[0-9]+\.[0-9]+(?=")' list.html > versions.txt
+          LATEST_VERSION=""
 
-          echo "发现版本目录："
-          cat versions.txt
+          echo "开始从 3.7.0 探测版本..."
 
-          LATEST_VERSION=$(sort -V versions.txt | tail -n 1)
-          echo "最新版本目录：$LATEST_VERSION"
+          for PATCH in $(seq $START_PATCH 20); do
+            VERSION="${START_MAJOR}.${START_MINOR}.${PATCH}"
+            URL="${BASE}/${VERSION}/标准版${VERSION}.txt"
 
+            echo "探测版本：$VERSION"
+
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL")
+
+            if [ "$STATUS" = "200" ]; then
+              echo "发现版本存在：$VERSION"
+              LATEST_VERSION="$VERSION"
+            else
+              echo "版本不存在：$VERSION"
+              break
+            fi
+          done
+
+          if [ -z "$LATEST_VERSION" ]; then
+            echo "未找到任何版本，退出"
+            exit 1
+          fi
+
+          echo "最终最新版本：$LATEST_VERSION"
           echo "$LATEST_VERSION" > latest_version.txt
           echo "LATEST_VERSION=$LATEST_VERSION" >> $GITHUB_ENV
 
@@ -48,10 +66,9 @@ jobs:
             fi
           fi
 
-      - name: Download APK files via Worker
+      - name: Download APK files
         run: |
-          # Worker 代理（用于下载文件）
-          BASE_URL_WORKER="https://jolly-morning-15a8.wuethan89.workers.dev/OK%E5%BD%B1%E8%A7%86/OK%E5%BD%B1%E8%A7%86%E6%A0%87%E5%87%86%E7%89%88/$LATEST_VERSION/"
+          BASE="https://autumn-dev-a340.wuethan89.workers.dev/OK影视/OK影视标准版/$LATEST_VERSION/"
           mkdir -p downloads
           cd downloads
 
@@ -65,7 +82,7 @@ jobs:
 
           for f in "${FILES[@]}"; do
             echo "下载 $f"
-            wget -q "${BASE_URL_WORKER}${f}"
+            wget -q "${BASE}${f}"
           done
 
       - name: Upload to Telegram
