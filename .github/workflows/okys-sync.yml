@@ -121,7 +121,7 @@ jobs:
           else
             echo "Telegram 推送失败"
             exit 1
-          fi
+          fi   # ←←← 你缺少的就是这个 fi
 
       - name: Save new version
         if: steps.check.outputs.changed == 'true'
