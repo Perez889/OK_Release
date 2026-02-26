@@ -1,10 +1,10 @@
-name: OK影视标准版 - 下载指定版本并推送 Telegram
+name: OK影视标准版 - 下载指定版本并推送 Telegram (支持自建API)
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: '输入最新版本号（如 3.7.0，从浏览器查看根目录得到）'
+        description: '输入版本号 (如 3.7.0)'
         required: true
         default: '3.7.0'
 
@@ -20,7 +20,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y curl jq
 
-      - name: 检查是否新版本
+      - name: 检查版本是否新
         id: check
         run: |
           VER="${{ inputs.version }}"
@@ -31,7 +31,7 @@ jobs:
             echo "new_version=$VER" >> $GITHUB_OUTPUT
             echo "run=true" >> $GITHUB_OUTPUT
           else
-            echo "版本 $VER 不大于上次 $LAST，跳过推送"
+            echo "版本不新，跳过"
             echo "run=false" >> $GITHUB_OUTPUT
           fi
 
@@ -42,9 +42,8 @@ jobs:
         run: |
           BASE="https://op.ll.dovx.cf/OK%E5%BD%B1%E8%A7%86/OK%E5%BD%B1%E8%A7%86%E6%A0%87%E5%87%86%E7%89%88/$VER/"
 
-          mkdir -p apks logs
+          mkdir -p apks
 
-          # 下载 5 个核心 APK
           APKS=(
             "海信专版-OK影视-${VER}.apk hisense"
             "leanback-arm64_v8a-${VER}.apk leanback_arm64"
@@ -57,38 +56,36 @@ jobs:
             file=$(echo $entry | cut -d' ' -f1)
             key=$(echo $entry | cut -d' ' -f2)
             url="${BASE}${file}"
-            echo "下载 $key: $url"
-            curl -L --retry 3 --max-time 60 -o "apks/${key}.apk" "$url" || echo "失败: $file"
+            curl -L --retry 3 --max-time 60 -o "apks/${key}.apk" "$url" || echo "下载失败: $file"
           done
 
-          # 重命名海信专版
           [ -f "apks/hisense.apk" ] && mv "apks/hisense.apk" "apks/hisense-tv-customized-${VER}.apk"
 
-          # 下载日志（优先标准版3.7.0.txt）
-          curl -s -o "logs/changelog.txt" "${BASE}标准版${VER}.txt" || echo "无日志文件"
+          curl -s -o changelog.txt "${BASE}标准版${VER}.txt" || echo "无日志"
 
-      - name: 处理日志并构建 caption
+      - name: 处理日志
         if: steps.check.outputs.run == 'true'
         env:
           VER: ${{ steps.check.outputs.new_version }}
         run: |
-          LOGS="• 本次更新：版本 $VER （源站日志文件内容或未找到）"
+          LOGS="• 本次更新：版本 $VER （无详细日志）"
 
-          if [ -s logs/changelog.txt ]; then
-            sed 's/^[ \t]*[-*•]\?[ \t]*/• /; s/^[ \t]*//; /^$/d' logs/changelog.txt > cleaned.txt
+          if [ -s changelog.txt ]; then
+            sed 's/^/• /' changelog.txt | grep -v '^$' > cleaned.txt
             LOGS=$(cat cleaned.txt)
           fi
 
           echo "logs<<EOF" >> $GITHUB_ENV
-          echo "$LOGS"
+          echo "$LOGS" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
 
-      - name: 推送 Telegram
+      - name: 推送 Telegram (支持自建 API base)
         if: steps.check.outputs.run == 'true'
         env:
           VER: ${{ steps.check.outputs.new_version }}
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          API_BASE: ${{ secrets.TELEGRAM_API_BASE }}   # <--- 新变量！自建服务器的 base URL
           LOGS: ${{ env.logs }}
         run: |
           UPDATE_TIME=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')
@@ -103,14 +100,21 @@ jobs:
           echo "$caption"
 
           APK_FILES=$(ls apks/*.apk 2>/dev/null | tr '\n' ' ')
-          [ -z "$APK_FILES" ] && { echo "无 APK"; exit 1; }
+          [ -z "$APK_FILES" ] && exit 1
+
+          # 使用自定义 API base（如果没设，默认用官方）
+          API_URL="${API_BASE:-https://api.telegram.org}"
+          FULL_URL="${API_URL}/bot${BOT_TOKEN}/sendDocument"
 
           curl --fail-with-body -s \
             -F chat_id="$CHAT_ID" \
             -F disable_notification=true \
             $(for f in $APK_FILES; do echo -n "-F document=@$f "; done) \
             -F caption="$caption" \
-            "https://api.telegram.org/bot$BOT_TOKEN/sendDocument" || exit 1
+            "$FULL_URL" || {
+              echo "发送失败，检查 token / ID / API_BASE"
+              exit 1
+            }
 
       - name: 更新记录
         if: steps.check.outputs.run == 'true'
@@ -119,9 +123,9 @@ jobs:
           git config --global user.name "GitHub Action"
           git config --global user.email "action@github.com"
           git add last_version.txt
-          git commit -m "推送版本: ${{ steps.check.outputs.new_version }}" || echo "无变化"
+          git commit -m "推送 $VER" || echo "无变化"
           git push --quiet
 
       - name: 清理
         if: always()
-        run: rm -rf apks logs *.txt || true
+        run: rm -rf apks changelog.txt cleaned.txt || true
