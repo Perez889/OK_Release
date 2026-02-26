@@ -90,11 +90,9 @@ jobs:
               "$merged_logs" "$LATEST_VERSION" "$update_time"
           )
 
-          {
-            echo "caption<<EOF"
-            echo "$safe_caption"
-            echo "EOF"
-          } >> $GITHUB_ENV
+          echo "caption<<EOF" >> $GITHUB_ENV
+          echo "$safe_caption" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
 
       - name: Download APK files
         if: steps.check.outputs.changed == 'true'
@@ -112,22 +110,21 @@ jobs:
       - name: 推送到 Telegram（caption 在最后）
         if: steps.check.outputs.changed == 'true'
         env:
-          BOT_TOKEN:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          CHAT_ID:     ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
           BOT_API_BASE: ${{ secrets.TELEGRAM_API_BASE }}
         run: |
           set -e
 
           ESCAPED_CAPTION=$(echo "$caption" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))')
 
-          media_json=$(cat <<EOF
-[{"type":"document","media":"attach://hisense-tv-customized-ok.apk"},
-{"type":"document","media":"attach://leanback-arm64_v8a-ok.apk"},
-{"type":"document","media":"attach://leanback-armeabi_v7a-ok.apk"},
-{"type":"document","media":"attach://mobile-arm64_v8a-ok.apk"},
-{"type":"document","media":"attach://mobile-armeabi_v7a-ok.apk","caption":$ESCAPED_CAPTION}]
-EOF
-)
+          media_json="[\
+{\"type\":\"document\",\"media\":\"attach://hisense-tv-customized-ok.apk\"},\
+{\"type\":\"document\",\"media\":\"attach://leanback-arm64_v8a-ok.apk\"},\
+{\"type\":\"document\",\"media\":\"attach://leanback-armeabi_v7a-ok.apk\"},\
+{\"type\":\"document\",\"media\":\"attach://mobile-arm64_v8a-ok.apk\"},\
+{\"type\":\"document\",\"media\":\"attach://mobile-armeabi_v7a-ok.apk\",\"caption\":$ESCAPED_CAPTION}\
+]"
 
           echo "DEBUG media_json:"
           echo "$media_json"
