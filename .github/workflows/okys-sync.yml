@@ -1,168 +1,95 @@
-name: OK影视标准版 - 下载指定版本并推送 Telegram
+name: OK影视自动更新
 
 on:
+  schedule:
+    - cron: "0 */6 * * *"   # 每 6 小时检查一次
   workflow_dispatch:
-    inputs:
-      version:
-        description: '输入版本号（如 3.7.0，从浏览器查看根目录得到）'
-        required: true
-        default: '3.7.0'
 
 jobs:
-  push:
+  update:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
-      - name: 安装工具
+      - name: Install tools
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y curl jq
+          sudo apt update
+          sudo apt install -y wget curl jq
 
-      - name: 检查版本是否新
-        id: check
+      - name: Fetch latest directory
         run: |
-          VER="${{ inputs.version }}"
-          echo "处理版本: $VER"
+          mkdir -p downloads
+          BASE_URL="https://op.ll.dovx.cf/OK影视/OK影视标准版/"
 
-          LAST=$(cat last_version.txt 2>/dev/null || echo "0.0.0")
-          if [[ "$VER" > "$LAST" ]]; then
-            echo "new_version=$VER" >> $GITHUB_OUTPUT
-            echo "run=true" >> $GITHUB_OUTPUT
-          else
-            echo "版本 $VER 不大于上次 $LAST，跳过推送"
-            echo "run=false" >> $GITHUB_OUTPUT
+          echo "获取目录列表..."
+          curl -s "$BASE_URL" -o list.html
+
+          # 提取 APK 链接
+          grep -oP '(?<=href=")[^"]+\.apk' list.html > apk_list.txt
+
+          # 只保留你需要的 5 个
+          grep -E "海信专版|leanback-arm64_v8a|leanback-armeabi_v7a|mobile-arm64_v8a|mobile-armeabi_v7a" apk_list.txt > final_list.txt
+
+      - name: Extract version & changelog
+        run: |
+          curl -s "https://op.ll.dovx.cf/OK影视/update.txt" -o update.txt || true
+
+          VERSION=$(grep -oP '\d+\.\d+\.\d+' update.txt | head -n 1)
+          echo "最新版本：$VERSION"
+
+          echo "$VERSION" > latest_version.txt
+
+          # 如果仓库里有旧版本文件，则比较
+          if [ -f last_version.txt ]; then
+            LAST=$(cat last_version.txt)
+            echo "上次版本：$LAST"
+
+            if [ "$LAST" = "$VERSION" ]; then
+              echo "版本未变化，退出。"
+              exit 0
+            fi
           fi
 
-      - name: 下载 5 个 APK（加 UA + 重试 + 详细日志）
-        if: steps.check.outputs.run == 'true'
-        env:
-          VER: ${{ steps.check.outputs.new_version }}
+          echo "版本变化，继续执行..."
+
+      - name: Download APK files
         run: |
-          BASE_URL="https://op.ll.dovx.cf/OK%E5%BD%B1%E8%A7%86/OK%E5%BD%B1%E8%A7%86%E6%A0%87%E5%87%86%E7%89%88/$VER/"
+          BASE_URL="https://op.ll.dovx.cf/OK影视/OK影视标准版/"
+          cd downloads
 
-          mkdir -p apks
+          while read -r file; do
+            echo "下载 $file"
+            wget -q "${BASE_URL}${file}"
+          done < ../final_list.txt
 
-          declare -A patterns=(
-            ["hisense"]="海信专版-OK影视-${VER}.apk"
-            ["leanback_arm64"]="leanback-arm64_v8a-${VER}.apk"
-            ["leanback_armeabi"]="leanback-armeabi_v7a-${VER}.apk"
-            ["mobile_arm64"]="mobile-arm64_v8a-${VER}.apk"
-            ["mobile_armeabi"]="mobile-armeabi_v7a-${VER}.apk"
-          )
+      - name: Upload to Telegram
+        env:
+          TELEGRAM_API_BASE: ${{ secrets.TELEGRAM_API_BASE }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+        run: |
+          cd downloads
 
-          downloaded=0
+          MESSAGE="📢 OK影视 新版本发布\n版本：${VERSION}\n\n更新日志：\n$(cat ../update.txt 2>/dev/null || echo '无')"
 
-          for key in "${!patterns[@]}"; do
-            file="${patterns[$key]}"
-            url="${BASE_URL}${file}"
-            echo "开始下载 $key: $url"
+          curl -s -X POST "$TELEGRAM_API_BASE/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+            -d chat_id="$TELEGRAM_CHANNEL_ID" \
+            -d text="$MESSAGE"
 
-            # 加浏览器 UA + 超时 + 重试 + 打印状态
-            http_code=$(curl -s -L \
-              -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-              --retry 5 --retry-delay 5 --max-time 120 \
-              -o "apks/${key}.apk" \
-              -w "%{http_code}" "$url")
-
-            if [ "$http_code" = "200" ]; then
-              echo "成功下载 $key (HTTP $http_code)"
-              ((downloaded++))
-            else
-              echo "下载失败 $key (HTTP $http_code)"
-              # 打印响应头调试
-              curl -s -I "$url" | head -n 10
-              rm -f "apks/${key}.apk"
-            fi
+          for f in *.apk; do
+            curl -s -X POST "$TELEGRAM_API_BASE/bot$TELEGRAM_BOT_TOKEN/sendDocument" \
+              -F chat_id="$TELEGRAM_CHANNEL_ID" \
+              -F document=@"$f" \
+              -F caption="$f"
           done
 
-          echo "总共成功下载 $downloaded 个文件"
-
-          if [ $downloaded -lt 3 ]; then
-            echo "下载文件太少 ($downloaded 个)，退出"
-            exit 1
-          fi
-
-          # 重命名海信专版
-          [ -f "apks/hisense.apk" ] && mv "apks/hisense.apk" "apks/hisense-tv-customized-${VER}.apk"
-
-      - name: 尝试获取并过滤更新日志
-        if: steps.check.outputs.run == 'true'
-        env:
-          VER: ${{ steps.check.outputs.new_version }}
+      - name: Save new version
         run: |
-          BASE_URL="https://op.ll.dovx.cf/OK%E5%BD%B1%E8%A7%86/OK%E5%BD%B1%E8%A7%86%E6%A0%87%E5%87%86%E7%89%88/$VER/"
-
-          logs="• 本次更新：版本升级到 $VER （源站暂无详细更新日志）"
-
-          # 尝试下载日志文件，并过滤 HTML
-          for log_name in "标准版${VER}.txt" "update.txt" "changelog.txt" "更新日志.txt"; do
-            curl -s -L -A "Mozilla/5.0" -o changelog.txt "${BASE_URL}${log_name}" || continue
-
-            if head -c 200 changelog.txt | grep -qiE '<html|<script|doctype'; then
-              echo "日志 $log_name 是 HTML 页面，忽略"
-              rm -f changelog.txt
-              continue
-            fi
-
-            if [ -s changelog.txt ]; then
-              head -c 800 changelog.txt > truncated.txt
-              sed 's/^[ \t]*[-*•]\?[ \t]*/• /; s/^[ \t]*//; /^$/d' truncated.txt > cleaned.txt
-              logs=$(cat cleaned.txt)
-              rm -f truncated.txt cleaned.txt
-              break
-            fi
-          done
-
-          logs=$(echo "$logs" | head -c 800)
-          echo "logs<<EOF" >> $GITHUB_ENV
-          echo "$logs" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
-
-      - name: 推送至 Telegram
-        if: steps.check.outputs.run == 'true'
-        env:
-          VER: ${{ steps.check.outputs.new_version }}
-          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
-          LOGS: ${{ env.logs }}
-        run: |
-          UPDATE_TIME=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')
-
-          caption=$(printf '%s\n\n%s\n\n%s\n\n%s\n%s\n' \
-            "OK影视 标准版 · $VER 更新推送" \
-            "本次更新：" \
-            "$LOGS" \
-            "当前版本：$VER" \
-            "更新时间：$UPDATE_TIME 北京时间")
-
-          echo "Caption (长度: ${#caption} 字符):"
-          echo "$caption"
-
-          APK_FILES=$(ls apks/*.apk 2>/dev/null | tr '\n' ' ')
-          [ -z "$APK_FILES" ] && { echo "无 APK 文件"; exit 1; }
-
-          curl --fail-with-body -s \
-            -F chat_id="$CHAT_ID" \
-            -F disable_notification=true \
-            $(for f in $APK_FILES; do echo -n "-F document=@$f "; done) \
-            -F caption="$caption" \
-            "https://api.telegram.org/bot$BOT_TOKEN/sendDocument" || {
-              echo "Telegram 发送失败（检查 token/ID/权限/caption长度）"
-              exit 1
-            }
-
-      - name: 更新版本记录
-        if: steps.check.outputs.run == 'true'
-        run: |
-          echo "${{ steps.check.outputs.new_version }}" > last_version.txt
-          git config --global user.name "GitHub Action"
-          git config --global user.email "action@github.com"
+          cp latest_version.txt last_version.txt
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
           git add last_version.txt
-          git commit -m "更新版本记录: ${{ steps.check.outputs.new_version }}" || echo "无变化"
-          git push --quiet
-
-      - name: 清理
-        if: always()
-        run: rm -rf apks changelog.txt truncated.txt cleaned.txt || true
+          git commit -m "更新版本号到 $VERSION" || echo "无变更"
+          git push || echo "无需推送"
