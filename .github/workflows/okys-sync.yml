@@ -18,38 +18,48 @@ jobs:
           sudo apt update
           sudo apt install -y wget curl jq
 
-      - name: Fetch version from update.txt
+      - name: Detect latest version by probing
         run: |
-          CHANGELOG_URL="https://jolly-morning-15a8.wuethan89.workers.dev/OK%E5%BD%B1%E8%A7%86/update.txt"
+          BASE="https://jolly-morning-15a8.wuethan89.workers.dev/OK%E5%BD%B1%E8%A7%86/OK%E5%BD%B1%E8%A7%86%E6%A0%87%E5%87%86%E7%89%88"
 
-          echo "获取 update.txt..."
-          curl -s "$CHANGELOG_URL" -o update.txt
+          echo "开始探测版本号..."
 
-          VERSION=$(grep -oP '\d+\.\d+\.\d+' update.txt | head -n 1)
+          LATEST="0.0.0"
 
-          if [ -z "$VERSION" ]; then
-            echo "无法从 update.txt 获取版本号，退出"
+          for major in {3..9}; do
+            for minor in {0..9}; do
+              for patch in {0..9}; do
+                V="${major}.${minor}.${patch}"
+                URL="$BASE/$V/%E6%A0%87%E5%87%86%E7%89%88${V}.txt"
+
+                STATUS=$(curl -o /dev/null -s -w "%{http_code}" "$URL")
+
+                if [ "$STATUS" = "200" ]; then
+                  echo "发现版本：$V"
+                  LATEST="$V"
+                fi
+              done
+            done
+          done
+
+          if [ "$LATEST" = "0.0.0" ]; then
+            echo "未找到任何版本，退出"
             exit 1
           fi
 
-          echo "最新版本号：$VERSION"
-          echo "$VERSION" > latest_version.txt
-          echo "LATEST_VERSION=$VERSION" >> $GITHUB_ENV
+          echo "最新版本号：$LATEST"
+          echo "$LATEST" > latest_version.txt
+          echo "LATEST_VERSION=$LATEST" >> $GITHUB_ENV
 
       - name: Compare version
         run: |
           if [ -f last_version.txt ]; then
             LAST=$(cat last_version.txt)
-            echo "上次版本：$LAST"
-            echo "本次版本：$LATEST_VERSION"
-
             if [ "$LAST" = "$LATEST_VERSION" ]; then
               echo "版本未变化，退出。"
               exit 0
             fi
           fi
-
-          echo "版本变化，继续执行..."
 
       - name: Download APK files
         run: |
@@ -78,7 +88,7 @@ jobs:
         run: |
           cd downloads
 
-          MESSAGE="📢 OK影视 新版本发布\n版本：${LATEST_VERSION}\n\n更新日志：\n$(cat ../update.txt)"
+          MESSAGE="📢 OK影视 新版本发布\n版本：${LATEST_VERSION}\n\n更新日志：无（未提供）"
 
           curl -s -X POST "$TELEGRAM_API_BASE/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
             -d chat_id="$TELEGRAM_CHANNEL_ID" \
@@ -94,8 +104,4 @@ jobs:
       - name: Save new version
         run: |
           cp latest_version.txt last_version.txt
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add last_version.txt
-          git commit -m "更新版本号到 $LATEST_VERSION" || echo "无变更"
-          git push || echo "无需推送"
+          git config user.name "github-actions
