@@ -29,6 +29,8 @@ jobs:
           LATEST_VERSION=""
           FOUND_FIRST="false"
 
+          echo "开始探测版本..."
+
           for PATCH in $(seq $START_PATCH 20); do
             VERSION="${START_MAJOR}.${START_MINOR}.${PATCH}"
             URL="${BASE}/${VERSION}/标准版${VERSION}.txt"
@@ -36,6 +38,7 @@ jobs:
             CONTENT=$(curl -s "$URL")
 
             if [ -n "$CONTENT" ]; then
+              echo "发现版本：$VERSION"
               LATEST_VERSION="$VERSION"
               FOUND_FIRST="true"
             else
@@ -60,15 +63,18 @@ jobs:
             LAST=$(cat last_version.txt)
             if [ "$LAST" = "$LATEST_VERSION" ]; then
               echo "changed=false" >> $GITHUB_OUTPUT
+              echo "版本未变化"
               exit 0
             fi
           fi
           echo "changed=true" >> $GITHUB_OUTPUT
 
-      - name: 下载并解析更新日志（FongMi风格）
+      - name: 获取并解析更新日志
         if: steps.check.outputs.changed == 'true'
         run: |
           LOG_URL="https://op.ll.dovx.cf/OK影视/OK影视标准版/${LATEST_VERSION}/标准版${LATEST_VERSION}.txt"
+
+          echo "下载日志: $LOG_URL"
 
           raw_log=$(curl -s "$LOG_URL")
 
@@ -86,7 +92,7 @@ jobs:
           update_time=$(TZ=Asia/Shanghai date '+%Y/%m/%d %H:%M')
 
           caption=$(
-            printf "\n\n - OK影视\n\n- 本次更新：\n%s\n\n - 当前版本：%s\n - 更新时间：%s" \
+            printf "📢 OK影视更新发布\n\n- 本次更新：\n%s\n\n- 当前版本：%s\n- 更新时间：%s" \
               "$merged_logs" "$LATEST_VERSION" "$update_time"
           )
 
@@ -103,12 +109,13 @@ jobs:
           mkdir -p apk
           cd apk
 
-          wget -q "${BASE}leanback-arm64_v8a-$LATEST_VERSION.apk" -O leanback-arm64_v8a.apk
-          wget -q "${BASE}leanback-armeabi_v7a-$LATEST_VERSION.apk" -O leanback-armeabi_v7a.apk
-          wget -q "${BASE}mobile-arm64_v8a-$LATEST_VERSION.apk" -O mobile-arm64_v8a.apk
-          wget -q "${BASE}mobile-armeabi_v7a-$LATEST_VERSION.apk" -O mobile-armeabi_v7a.apk
+          wget -q "${BASE}海信专版-OK影视-$LATEST_VERSION.apk" -O hisense-tv-customized-ok.apk
+          wget -q "${BASE}leanback-arm64_v8a-$LATEST_VERSION.apk" -O leanback-arm64_v8a-ok.apk
+          wget -q "${BASE}leanback-armeabi_v7a-$LATEST_VERSION.apk" -O leanback-armeabi_v7a-ok.apk
+          wget -q "${BASE}mobile-arm64_v8a-$LATEST_VERSION.apk" -O mobile-arm64_v8a-ok.apk
+          wget -q "${BASE}mobile-armeabi_v7a-$LATEST_VERSION.apk" -O mobile-armeabi_v7a-ok.apk
 
-      - name: 推送到 Telegram（caption 放到最后一个文件）
+      - name: 推送到 Telegram（caption 在最后）
         if: steps.check.outputs.changed == 'true'
         env:
           BOT_TOKEN:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -116,30 +123,35 @@ jobs:
           BOT_API_BASE: ${{ secrets.TELEGRAM_API_BASE }}
         run: |
           for f in \
-            "leanback-arm64_v8a.apk" \
-            "leanback-armeabi_v7a.apk" \
-            "mobile-arm64_v8a.apk" \
-            "mobile-armeabi_v7a.apk"; do
+            "hisense-tv-customized-ok.apk" \
+            "leanback-arm64_v8a-ok.apk" \
+            "leanback-armeabi_v7a-ok.apk" \
+            "mobile-arm64_v8a-ok.apk" \
+            "mobile-armeabi_v7a-ok.apk"; do
             if [ ! -f "apk/$f" ]; then
               echo "缺少文件 apk/$f"
               exit 1
             fi
           done
 
-          media='[
-            {"type":"document", "media":"attach://leanback-arm64_v8a.apk"},
-            {"type":"document", "media":"attach://leanback-armeabi_v7a.apk"},
-            {"type":"document", "media":"attach://mobile-arm64_v8a.apk"},
-            {"type":"document", "media":"attach://mobile-armeabi_v7a.apk", "caption":"'"$caption"'"}
-          ]'
+          media=$(jq -n \
+            --arg caption "$caption" \
+            '[
+              {"type":"document","media":"attach://hisense-tv-customized-ok.apk"},
+              {"type":"document","media":"attach://leanback-arm64_v8a-ok.apk"},
+              {"type":"document","media":"attach://leanback-armeabi_v7a-ok.apk"},
+              {"type":"document","media":"attach://mobile-arm64_v8a-ok.apk"},
+              {"type":"document","media":"attach://mobile-armeabi_v7a-ok.apk","caption":$caption}
+            ]')
 
           response=$(curl -s -X POST "$BOT_API_BASE/bot$BOT_TOKEN/sendMediaGroup" \
             -F chat_id="$CHAT_ID" \
             -F media="$media" \
-            -F "leanback-arm64_v8a.apk=@apk/leanback-arm64_v8a.apk" \
-            -F "leanback-armeabi_v7a.apk=@apk/leanback-armeabi_v7a.apk" \
-            -F "mobile-arm64_v8a.apk=@apk/mobile-arm64_v8a.apk" \
-            -F "mobile-armeabi_v7a.apk=@apk/mobile-armeabi_v7a.apk")
+            -F "hisense-tv-customized-ok.apk=@apk/hisense-tv-customized-ok.apk" \
+            -F "leanback-arm64_v8a-ok.apk=@apk/leanback-arm64_v8a-ok.apk" \
+            -F "leanback-armeabi_v7a-ok.apk=@apk/leanback-armeabi_v7a-ok.apk" \
+            -F "mobile-arm64_v8a-ok.apk=@apk/mobile-arm64_v8a-ok.apk" \
+            -F "mobile-armeabi_v7a-ok.apk=@apk/mobile-armeabi_v7a-ok.apk")
 
           echo "Telegram 响应: $response"
 
