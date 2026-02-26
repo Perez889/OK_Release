@@ -16,7 +16,7 @@ jobs:
       - name: Install tools
         run: |
           sudo apt update
-          sudo apt install -y wget curl jq opencc
+          sudo apt install -y wget curl jq opencc python3
 
       - name: Detect latest version
         run: |
@@ -85,14 +85,15 @@ jobs:
 
           update_time=$(TZ=Asia/Shanghai date '+%Y/%m/%d %H:%M')
 
-          caption=$(
-            printf "📢 OK影视更新发布\n\n- 本次更新：\n%s\n\n- 当前版本：%s\n- 更新时间：%s" \
+          # 去掉 emoji
+          safe_caption=$(
+            printf "\n\n- 本次更新：\n%s\n\n- 当前版本：%s\n- 更新时间：%s" \
               "$merged_logs" "$LATEST_VERSION" "$update_time"
           )
 
           {
             echo "caption<<EOF"
-            echo "$caption"
+            echo "$safe_caption"
             echo "EOF"
           } >> $GITHUB_ENV
 
@@ -118,28 +119,20 @@ jobs:
         run: |
           set -e
 
-          for f in \
-            "hisense-tv-customized-ok.apk" \
-            "leanback-arm64_v8a-ok.apk" \
-            "leanback-armeabi_v7a-ok.apk" \
-            "mobile-arm64_v8a-ok.apk" \
-            "mobile-armeabi_v7a-ok.apk"; do
-            if [ ! -f "apk/$f" ]; then
-              echo "缺少文件 apk/$f"
-              exit 1
-            fi
-          done
+          # 转义 caption 里的特殊字符和换行
+          ESCAPED_CAPTION=$(echo "$caption" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().strip()))')
 
-          # jq -c 确保 JSON 单行
-          media_json=$(jq -cn \
-            --arg cap "$caption" \
-            '[
-              {"type":"document","media":"attach://hisense-tv-customized-ok.apk"},
-              {"type":"document","media":"attach://leanback-arm64_v8a-ok.apk"},
-              {"type":"document","media":"attach://leanback-armeabi_v7a-ok.apk"},
-              {"type":"document","media":"attach://mobile-arm64_v8a-ok.apk"},
-              {"type":"document","media":"attach://mobile-armeabi_v7a-ok.apk","caption":$cap}
-            ]' | jq -c .)
+          media_json=$(cat <<EOF
+[{"type":"document","media":"attach://hisense-tv-customized-ok.apk"},
+ {"type":"document","media":"attach://leanback-arm64_v8a-ok.apk"},
+ {"type":"document","media":"attach://leanback-armeabi_v7a-ok.apk"},
+ {"type":"document","media":"attach://mobile-arm64_v8a-ok.apk"},
+ {"type":"document","media":"attach://mobile-armeabi_v7a-ok.apk","caption":$ESCAPED_CAPTION}]
+EOF
+)
+
+          echo "DEBUG media_json:"
+          echo "$media_json"
 
           response=$(curl -s -X POST "$BOT_API_BASE/bot$BOT_TOKEN/sendMediaGroup" \
             -F chat_id="$CHAT_ID" \
