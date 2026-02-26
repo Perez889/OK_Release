@@ -16,7 +16,7 @@ jobs:
       - name: Install tools
         run: |
           sudo apt update
-          sudo apt install -y wget curl jq
+          sudo apt install -y wget curl jq opencc
 
       - name: Detect latest version
         run: |
@@ -27,118 +27,131 @@ jobs:
           START_PATCH=0
 
           LATEST_VERSION=""
-
-          echo "开始从 3.7.0 探测版本..."
+          FOUND_FIRST="false"
 
           for PATCH in $(seq $START_PATCH 20); do
             VERSION="${START_MAJOR}.${START_MINOR}.${PATCH}"
             URL="${BASE}/${VERSION}/标准版${VERSION}.txt"
 
-            echo "探测版本：$VERSION"
+            CONTENT=$(curl -s "$URL")
 
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL")
-
-            if [ "$STATUS" = "200" ]; then
-              echo "发现版本存在：$VERSION"
+            if [ -n "$CONTENT" ]; then
               LATEST_VERSION="$VERSION"
+              FOUND_FIRST="true"
             else
-              echo "版本不存在：$VERSION"
-              break
+              if [ "$FOUND_FIRST" = "true" ]; then
+                break
+              fi
             fi
           done
 
           if [ -z "$LATEST_VERSION" ]; then
-            echo "未找到任何版本，退出"
+            echo "未找到版本"
             exit 1
           fi
 
-          echo "最终最新版本：$LATEST_VERSION"
-          echo "$LATEST_VERSION" > latest_version.txt
           echo "LATEST_VERSION=$LATEST_VERSION" >> $GITHUB_ENV
+          echo "$LATEST_VERSION" > latest_version.txt
 
       - name: Compare version
+        id: check
         run: |
           if [ -f last_version.txt ]; then
             LAST=$(cat last_version.txt)
             if [ "$LAST" = "$LATEST_VERSION" ]; then
-              echo "版本未变化，退出。"
+              echo "changed=false" >> $GITHUB_OUTPUT
               exit 0
             fi
           fi
+          echo "changed=true" >> $GITHUB_OUTPUT
 
-      - name: 获取更新日志
+      - name: 下载并解析更新日志（FongMi风格）
+        if: steps.check.outputs.changed == 'true'
         run: |
           LOG_URL="https://op.ll.dovx.cf/OK影视/OK影视标准版/${LATEST_VERSION}/标准版${LATEST_VERSION}.txt"
 
-          echo "下载更新日志：$LOG_URL"
+          raw_log=$(curl -s "$LOG_URL")
 
-          LOG_CONTENT=$(curl -s "$LOG_URL")
-
-          if [ -z "$LOG_CONTENT" ]; then
-            LOG_CONTENT="暂无更新日志"
+          if [ -z "$raw_log" ]; then
+            raw_log="暂无更新日志"
           fi
 
-          CLEAN_LOG=$(echo "$LOG_CONTENT" | sed '/^$/d' | sed 's/^/• /g')
+          merged_logs=$(echo "$raw_log" \
+            | sed 's/^\* //g' \
+            | sed '/^$/d' \
+            | sort | uniq \
+            | sed 's/^/• /g' \
+            | opencc -c t2s.json)
 
-          UPDATE_TIME=$(TZ=Asia/Shanghai date '+%Y/%m/%d %H:%M')
+          update_time=$(TZ=Asia/Shanghai date '+%Y/%m/%d %H:%M')
 
-          CAPTION=$(printf "📢 OK影视新版本发布\n\n- 本次更新：\n%s\n\n- 当前版本：%s\n- 更新时间：%s" \
-            "$CLEAN_LOG" "$LATEST_VERSION" "$UPDATE_TIME")
+          caption=$(
+            printf "\n\n - OK影视\n\n- 本次更新：\n%s\n\n - 当前版本：%s\n - 更新时间：%s" \
+              "$merged_logs" "$LATEST_VERSION" "$update_time"
+          )
 
           {
-            echo "CAPTION<<EOF"
-            echo "$CAPTION"
+            echo "caption<<EOF"
+            echo "$caption"
             echo "EOF"
           } >> $GITHUB_ENV
 
       - name: Download APK files
+        if: steps.check.outputs.changed == 'true'
         run: |
           BASE="https://op.ll.dovx.cf/OK影视/OK影视标准版/$LATEST_VERSION/"
-          mkdir -p downloads
-          cd downloads
+          mkdir -p apk
+          cd apk
 
-          declare -a FILES=(
-            "海信专版-OK影视-$LATEST_VERSION.apk"
-            "leanback-arm64_v8a-$LATEST_VERSION.apk"
-            "leanback-armeabi_v7a-$LATEST_VERSION.apk"
-            "mobile-arm64_v8a-$LATEST_VERSION.apk"
-            "mobile-armeabi_v7a-$LATEST_VERSION.apk"
-          )
+          wget -q "${BASE}leanback-arm64_v8a-$LATEST_VERSION.apk" -O leanback-arm64_v8a.apk
+          wget -q "${BASE}leanback-armeabi_v7a-$LATEST_VERSION.apk" -O leanback-armeabi_v7a.apk
+          wget -q "${BASE}mobile-arm64_v8a-$LATEST_VERSION.apk" -O mobile-arm64_v8a.apk
+          wget -q "${BASE}mobile-armeabi_v7a-$LATEST_VERSION.apk" -O mobile-armeabi_v7a.apk
 
-          for f in "${FILES[@]}"; do
-            echo "下载 $f"
-            wget -q "${BASE}${f}"
-          done
-
-      - name: Upload to Telegram
+      - name: 推送到 Telegram（caption 放到最后一个文件）
+        if: steps.check.outputs.changed == 'true'
         env:
-          TELEGRAM_API_BASE: ${{ secrets.TELEGRAM_API_BASE }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          BOT_TOKEN:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID:     ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          BOT_API_BASE: ${{ secrets.TELEGRAM_API_BASE }}
         run: |
-          cd downloads
-
-          FILE_LIST=(*.apk)
-          LAST_INDEX=$((${#FILE_LIST[@]} - 1))
-
-          for i in "${!FILE_LIST[@]}"; do
-            f="${FILE_LIST[$i]}"
-            echo "上传 $f"
-
-            if [ "$i" -eq "$LAST_INDEX" ]; then
-              echo "这是最后一个文件，附带更新日志"
-              curl -s -X POST "$TELEGRAM_API_BASE/bot$TELEGRAM_BOT_TOKEN/sendDocument" \
-                -F chat_id="$TELEGRAM_CHANNEL_ID" \
-                -F document=@"$f" \
-                -F caption="$CAPTION"
-            else
-              curl -s -X POST "$TELEGRAM_API_BASE/bot$TELEGRAM_BOT_TOKEN/sendDocument" \
-                -F chat_id="$TELEGRAM_CHANNEL_ID" \
-                -F document=@"$f"
+          for f in \
+            "leanback-arm64_v8a.apk" \
+            "leanback-armeabi_v7a.apk" \
+            "mobile-arm64_v8a.apk" \
+            "mobile-armeabi_v7a.apk"; do
+            if [ ! -f "apk/$f" ]; then
+              echo "缺少文件 apk/$f"
+              exit 1
             fi
           done
 
+          media='[
+            {"type":"document", "media":"attach://leanback-arm64_v8a.apk"},
+            {"type":"document", "media":"attach://leanback-armeabi_v7a.apk"},
+            {"type":"document", "media":"attach://mobile-arm64_v8a.apk"},
+            {"type":"document", "media":"attach://mobile-armeabi_v7a.apk", "caption":"'"$caption"'"}
+          ]'
+
+          response=$(curl -s -X POST "$BOT_API_BASE/bot$BOT_TOKEN/sendMediaGroup" \
+            -F chat_id="$CHAT_ID" \
+            -F media="$media" \
+            -F "leanback-arm64_v8a.apk=@apk/leanback-arm64_v8a.apk" \
+            -F "leanback-armeabi_v7a.apk=@apk/leanback-armeabi_v7a.apk" \
+            -F "mobile-arm64_v8a.apk=@apk/mobile-arm64_v8a.apk" \
+            -F "mobile-armeabi_v7a.apk=@apk/mobile-armeabi_v7a.apk")
+
+          echo "Telegram 响应: $response"
+
+          if echo "$response" | grep -q '"ok":true'; then
+            echo "Telegram 推送成功"
+          else
+            echo "Telegram 推送失败"
+            exit 1
+          fi
+
       - name: Save new version
+        if: steps.check.outputs.changed == 'true'
         run: |
           cp latest_version.txt last_version.txt
           git config user.name "github-actions"
