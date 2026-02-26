@@ -29,8 +29,6 @@ jobs:
           LATEST_VERSION=""
           FOUND_FIRST="false"
 
-          echo "开始探测版本..."
-
           for PATCH in $(seq $START_PATCH 20); do
             VERSION="${START_MAJOR}.${START_MINOR}.${PATCH}"
             URL="${BASE}/${VERSION}/标准版${VERSION}.txt"
@@ -38,7 +36,6 @@ jobs:
             CONTENT=$(curl -s "$URL")
 
             if [ -n "$CONTENT" ]; then
-              echo "发现版本：$VERSION"
               LATEST_VERSION="$VERSION"
               FOUND_FIRST="true"
             else
@@ -63,7 +60,6 @@ jobs:
             LAST=$(cat last_version.txt)
             if [ "$LAST" = "$LATEST_VERSION" ]; then
               echo "changed=false" >> $GITHUB_OUTPUT
-              echo "版本未变化"
               exit 0
             fi
           fi
@@ -73,8 +69,6 @@ jobs:
         if: steps.check.outputs.changed == 'true'
         run: |
           LOG_URL="https://op.ll.dovx.cf/OK影视/OK影视标准版/${LATEST_VERSION}/标准版${LATEST_VERSION}.txt"
-
-          echo "下载日志: $LOG_URL"
 
           raw_log=$(curl -s "$LOG_URL")
 
@@ -122,6 +116,13 @@ jobs:
           CHAT_ID:     ${{ secrets.TELEGRAM_CHANNEL_ID }}
           BOT_API_BASE: ${{ secrets.TELEGRAM_API_BASE }}
         run: |
+          set -e
+
+          if [ -z "${caption+x}" ]; then
+            echo "caption 变量不存在"
+            exit 1
+          fi
+
           for f in \
             "hisense-tv-customized-ok.apk" \
             "leanback-arm64_v8a-ok.apk" \
@@ -134,19 +135,19 @@ jobs:
             fi
           done
 
-          media=$(jq -n \
-            --arg caption "$caption" \
+          media_json=$(jq -cn \
+            --arg cap "$caption" \
             '[
               {"type":"document","media":"attach://hisense-tv-customized-ok.apk"},
               {"type":"document","media":"attach://leanback-arm64_v8a-ok.apk"},
               {"type":"document","media":"attach://leanback-armeabi_v7a-ok.apk"},
               {"type":"document","media":"attach://mobile-arm64_v8a-ok.apk"},
-              {"type":"document","media":"attach://mobile-armeabi_v7a-ok.apk","caption":$caption}
+              {"type":"document","media":"attach://mobile-armeabi_v7a-ok.apk","caption":$cap}
             ]')
 
           response=$(curl -s -X POST "$BOT_API_BASE/bot$BOT_TOKEN/sendMediaGroup" \
             -F chat_id="$CHAT_ID" \
-            -F media="$media" \
+            -F media="$media_json" \
             -F "hisense-tv-customized-ok.apk=@apk/hisense-tv-customized-ok.apk" \
             -F "leanback-arm64_v8a-ok.apk=@apk/leanback-arm64_v8a-ok.apk" \
             -F "leanback-armeabi_v7a-ok.apk=@apk/leanback-armeabi_v7a-ok.apk" \
