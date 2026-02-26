@@ -1,8 +1,8 @@
 name: OK影视自动更新
 
-on:
-  schedule:
-    - cron: "0 */6 * * *"
+#on:
+  #schedule:
+    #- cron: "0 */6 * * *"
   workflow_dispatch:
 
 jobs:
