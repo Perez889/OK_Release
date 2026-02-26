@@ -35,7 +35,7 @@ jobs:
             echo "run=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: 下载 5 个 APK
+      - name: 下载 5 个 APK（加 UA + 重试 + 详细日志）
         if: steps.check.outputs.run == 'true'
         env:
           VER: ${{ steps.check.outputs.new_version }}
@@ -57,18 +57,30 @@ jobs:
           for key in "${!patterns[@]}"; do
             file="${patterns[$key]}"
             url="${BASE_URL}${file}"
-            echo "尝试下载 $key: $url"
-            http_code=$(curl -s -o "apks/${key}.apk" -w "%{http_code}" --retry 3 --max-time 60 "$url")
+            echo "开始下载 $key: $url"
+
+            # 加浏览器 UA + 超时 + 重试 + 打印状态
+            http_code=$(curl -s -L \
+              -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+              --retry 5 --retry-delay 5 --max-time 120 \
+              -o "apks/${key}.apk" \
+              -w "%{http_code}" "$url")
+
             if [ "$http_code" = "200" ]; then
+              echo "成功下载 $key (HTTP $http_code)"
               ((downloaded++))
             else
-              echo "下载失败 ($http_code): $file"
+              echo "下载失败 $key (HTTP $http_code)"
+              # 打印响应头调试
+              curl -s -I "$url" | head -n 10
               rm -f "apks/${key}.apk"
             fi
           done
 
+          echo "总共成功下载 $downloaded 个文件"
+
           if [ $downloaded -lt 3 ]; then
-            echo "只下载到 $downloaded 个文件，退出"
+            echo "下载文件太少 ($downloaded 个)，退出"
             exit 1
           fi
 
@@ -84,18 +96,16 @@ jobs:
 
           logs="• 本次更新：版本升级到 $VER （源站暂无详细更新日志）"
 
-          # 尝试下载可能的日志文件
+          # 尝试下载日志文件，并过滤 HTML
           for log_name in "标准版${VER}.txt" "update.txt" "changelog.txt" "更新日志.txt"; do
-            curl -s -o changelog.txt "${BASE_URL}${log_name}" || continue
+            curl -s -L -A "Mozilla/5.0" -o changelog.txt "${BASE_URL}${log_name}" || continue
 
-            # 检查是否是 HTML（如果前 200 字节含 <html 或 <script，则忽略）
             if head -c 200 changelog.txt | grep -qiE '<html|<script|doctype'; then
-              echo "日志文件 $log_name 疑似 HTML 页面，忽略"
+              echo "日志 $log_name 是 HTML 页面，忽略"
               rm -f changelog.txt
               continue
             fi
 
-            # 如果是正常文本，截断到 800 字节，避免 caption 超长
             if [ -s changelog.txt ]; then
               head -c 800 changelog.txt > truncated.txt
               sed 's/^[ \t]*[-*•]\?[ \t]*/• /; s/^[ \t]*//; /^$/d' truncated.txt > cleaned.txt
@@ -105,9 +115,7 @@ jobs:
             fi
           done
 
-          # 最终强制截断 logs（安全起见）
           logs=$(echo "$logs" | head -c 800)
-
           echo "logs<<EOF" >> $GITHUB_ENV
           echo "$logs" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
@@ -129,7 +137,8 @@ jobs:
             "当前版本：$VER" \
             "更新时间：$UPDATE_TIME 北京时间")
 
-          echo "生成的 caption（长度检查）：${#caption} 字符"
+          echo "Caption (长度: ${#caption} 字符):"
+          echo "$caption"
 
           APK_FILES=$(ls apks/*.apk 2>/dev/null | tr '\n' ' ')
           [ -z "$APK_FILES" ] && { echo "无 APK 文件"; exit 1; }
@@ -140,7 +149,7 @@ jobs:
             $(for f in $APK_FILES; do echo -n "-F document=@$f "; done) \
             -F caption="$caption" \
             "https://api.telegram.org/bot$BOT_TOKEN/sendDocument" || {
-              echo "Telegram 发送失败（常见原因：caption 仍超长、token/ID 错、频道权限不足）"
+              echo "Telegram 发送失败（检查 token/ID/权限/caption长度）"
               exit 1
             }
 
