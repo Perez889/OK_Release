@@ -1,148 +1,127 @@
-name: OK影视标准版 - 自动下载并推送到Telegram
+name: OK影视标准版 - 下载指定版本并推送 Telegram
 
 on:
-  schedule:
-    - cron: '*/30 * * * *'
   workflow_dispatch:
+    inputs:
+      version:
+        description: '输入最新版本号（如 3.7.0，从浏览器查看根目录得到）'
+        required: true
+        default: '3.7.0'
 
 jobs:
-  sync:
+  push:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout 仓库
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: 安装必要工具
+      - name: 安装工具
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y curl jq
 
-      - name: 获取目录列表并确定最新版本
-        id: get_latest
+      - name: 检查是否新版本
+        id: check
         run: |
-          curl -s --max-time 15 "https://op.ll.dovx.cf/OK%E5%BD%B1%E8%A7%86/OK%E5%BD%B1%E8%A7%86%E6%A0%87%E5%87%86%E7%89%88/" > index.html || { echo "无法访问根目录"; exit 1; }
+          VER="${{ inputs.version }}"
+          echo "处理版本: $VER"
 
-          versions=$(grep -oP '\b\d+\.\d+\.\d+\b' index.html | sort -Vu)
-          latest_version=$(echo "$versions" | tail -n 1)
-
-          if [ -z "$latest_version" ]; then
-            echo "未提取到版本号，页面预览："
-            head -n 40 index.html
-            exit 1
-          fi
-
-          echo "最新版本: $latest_version"
-
-          last_version=$(cat last_version.txt 2>/dev/null || echo "0.0.0")
-          if [[ "$latest_version" > "$last_version" ]]; then
-            echo "new_version=$latest_version" >> $GITHUB_OUTPUT
-            echo "has_update=true" >> $GITHUB_OUTPUT
+          LAST=$(cat last_version.txt 2>/dev/null || echo "0.0.0")
+          if [[ "$VER" > "$LAST" ]]; then
+            echo "new_version=$VER" >> $GITHUB_OUTPUT
+            echo "run=true" >> $GITHUB_OUTPUT
           else
-            echo "has_update=false" >> $GITHUB_OUTPUT
+            echo "版本 $VER 不大于上次 $LAST，跳过推送"
+            echo "run=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: 下载 5 个 APK 并重命名
-        if: steps.get_latest.outputs.has_update == 'true'
+      - name: 下载 APK 和日志
+        if: steps.check.outputs.run == 'true'
         env:
-          VER: ${{ steps.get_latest.outputs.new_version }}
+          VER: ${{ steps.check.outputs.new_version }}
         run: |
-          BASE_URL="https://op.ll.dovx.cf/OK%E5%BD%B1%E8%A7%86/OK%E5%BD%B1%E8%A7%86%E6%A0%87%E5%87%86%E7%89%88/$VER/"
+          BASE="https://op.ll.dovx.cf/OK%E5%BD%B1%E8%A7%86/OK%E5%BD%B1%E8%A7%86%E6%A0%87%E5%87%86%E7%89%88/$VER/"
 
-          declare -A patterns=(
-            ["hisense"]="海信专版-OK影视-${VER}.apk"
-            ["leanback_arm64"]="leanback-arm64_v8a-${VER}.apk"
-            ["leanback_armeabi"]="leanback-armeabi_v7a-${VER}.apk"
-            ["mobile_arm64"]="mobile-arm64_v8a-${VER}.apk"
-            ["mobile_armeabi"]="mobile-armeabi_v7a-${VER}.apk"
+          mkdir -p apks logs
+
+          # 下载 5 个核心 APK
+          APKS=(
+            "海信专版-OK影视-${VER}.apk hisense"
+            "leanback-arm64_v8a-${VER}.apk leanback_arm64"
+            "leanback-armeabi_v7a-${VER}.apk leanback_armeabi"
+            "mobile-arm64_v8a-${VER}.apk mobile_arm64"
+            "mobile-armeabi_v7a-${VER}.apk mobile_armeabi"
           )
 
-          mkdir -p apks
-          downloaded=0
-
-          for key in "${!patterns[@]}"; do
-            file="${patterns[$key]}"
-            url="${BASE_URL}${file}"
-            echo "尝试下载 $key: $url"
-            http_code=$(curl -s -o "apks/${key}.apk" -w "%{http_code}" --retry 2 --max-time 60 "$url")
-            if [ "$http_code" = "200" ]; then
-              ((downloaded++))
-            else
-              echo "下载失败 ($http_code): $file"
-              rm -f "apks/${key}.apk"
-            fi
+          for entry in "${APKS[@]}"; do
+            file=$(echo $entry | cut -d' ' -f1)
+            key=$(echo $entry | cut -d' ' -f2)
+            url="${BASE}${file}"
+            echo "下载 $key: $url"
+            curl -L --retry 3 --max-time 60 -o "apks/${key}.apk" "$url" || echo "失败: $file"
           done
 
-          if [ $downloaded -lt 3 ]; then
-            echo "只成功下载 $downloaded 个文件，退出"
-            exit 1
-          fi
-
+          # 重命名海信专版
           [ -f "apks/hisense.apk" ] && mv "apks/hisense.apk" "apks/hisense-tv-customized-${VER}.apk"
 
-      - name: 尝试获取更新日志
-        if: steps.get_latest.outputs.has_update == 'true'
-        env:
-          VER: ${{ steps.get_latest.outputs.new_version }}
-        run: |
-          BASE_URL="https://op.ll.dovx.cf/OK%E5%BD%B1%E8%A7%86/OK%E5%BD%B1%E8%A7%86%E6%A0%87%E5%87%86%E7%89%88/$VER/"
-          logs="• 本次更新：版本升级到 $VER （源站未提供详细日志）"
+          # 下载日志（优先标准版3.7.0.txt）
+          curl -s -o "logs/changelog.txt" "${BASE}标准版${VER}.txt" || echo "无日志文件"
 
-          log_file=$(curl -s "$BASE_URL" | grep -ioP '[^"]*\.txt(?=")' | grep -i '更新\|change\|标准版' | head -n1 || true)
-          if [ -n "$log_file" ]; then
-            curl -s "${BASE_URL}${log_file}" > changelog.txt
-            if [ -s changelog.txt ]; then
-              sed 's/^[ \t]*[-*•]\?[ \t]*/• /; /^$/d' changelog.txt > cleaned.txt
-              logs=$(cat cleaned.txt)
-            fi
+      - name: 处理日志并构建 caption
+        if: steps.check.outputs.run == 'true'
+        env:
+          VER: ${{ steps.check.outputs.new_version }}
+        run: |
+          LOGS="• 本次更新：版本 $VER （源站日志文件内容或未找到）"
+
+          if [ -s logs/changelog.txt ]; then
+            sed 's/^[ \t]*[-*•]\?[ \t]*/• /; s/^[ \t]*//; /^$/d' logs/changelog.txt > cleaned.txt
+            LOGS=$(cat cleaned.txt)
           fi
 
           echo "logs<<EOF" >> $GITHUB_ENV
-          echo "$logs" >> $GITHUB_ENV
+          echo "$LOGS"
           echo "EOF" >> $GITHUB_ENV
 
-      - name: 构建 Caption 并发送到 Telegram
-        if: steps.get_latest.outputs.has_update == 'true'
+      - name: 推送 Telegram
+        if: steps.check.outputs.run == 'true'
         env:
-          VER: ${{ steps.get_latest.outputs.new_version }}
+          VER: ${{ steps.check.outputs.new_version }}
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
           LOGS: ${{ env.logs }}
         run: |
           UPDATE_TIME=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')
 
-          # 使用 printf 构建 caption，避免 heredoc 语法冲突
-          caption=$(printf 'OK影视 标准版 · %s 更新推送\n\n本次更新：\n%s\n\n当前版本：%s\n更新时间：%s 北京时间\n' \
-            "$VER" \
+          caption=$(printf '%s\n\n%s\n\n%s\n\n%s\n%s\n' \
+            "OK影视 标准版 · $VER 更新推送" \
+            "本次更新：" \
             "$LOGS" \
-            "$VER" \
-            "$UPDATE_TIME")
+            "当前版本：$VER" \
+            "更新时间：$UPDATE_TIME 北京时间")
 
-          echo "Caption:"
           echo "$caption"
 
           APK_FILES=$(ls apks/*.apk 2>/dev/null | tr '\n' ' ')
-          [ -z "$APK_FILES" ] && { echo "没有 APK 文件"; exit 1; }
+          [ -z "$APK_FILES" ] && { echo "无 APK"; exit 1; }
 
           curl --fail-with-body -s \
             -F chat_id="$CHAT_ID" \
             -F disable_notification=true \
             $(for f in $APK_FILES; do echo -n "-F document=@$f "; done) \
             -F caption="$caption" \
-            "https://api.telegram.org/bot$BOT_TOKEN/sendDocument" || {
-              echo "Telegram 发送失败"
-              exit 1
-            }
+            "https://api.telegram.org/bot$BOT_TOKEN/sendDocument" || exit 1
 
-      - name: 更新版本记录
-        if: steps.get_latest.outputs.has_update == 'true'
+      - name: 更新记录
+        if: steps.check.outputs.run == 'true'
         run: |
-          echo "${{ steps.get_latest.outputs.new_version }}" > last_version.txt
+          echo "${{ steps.check.outputs.new_version }}" > last_version.txt
           git config --global user.name "GitHub Action"
           git config --global user.email "action@github.com"
           git add last_version.txt
-          git commit -m "更新最新版本: ${{ steps.get_latest.outputs.new_version }}" || echo "无变化跳过"
+          git commit -m "推送版本: ${{ steps.check.outputs.new_version }}" || echo "无变化"
           git push --quiet
 
-      - name: 清理临时文件
+      - name: 清理
         if: always()
-        run: rm -rf apks *.html changelog.txt cleaned.txt || true
+        run: rm -rf apks logs *.txt || true
