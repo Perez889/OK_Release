@@ -20,7 +20,7 @@ jobs:
 
       - name: Detect latest version
         run: |
-          BASE="https://autumn-dev-a340.wuethan89.workers.dev/OK影视/OK影视标准版"
+          BASE="https://op.ll.dovx.cf/OK影视/OK影视标准版"
 
           START_MAJOR=3
           START_MINOR=7
@@ -68,7 +68,7 @@ jobs:
 
       - name: Download APK files
         run: |
-          BASE="https://autumn-dev-a340.wuethan89.workers.dev/OK影视/OK影视标准版/$LATEST_VERSION/"
+          BASE="https://op.ll.dovx.cf/OK影视/OK影视标准版/$LATEST_VERSION/"
           mkdir -p downloads
           cd downloads
 
