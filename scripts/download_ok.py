@@ -1,96 +1,122 @@
-import requests
-import re
 import os
-from datetime import datetime
-from tqdm import tqdm
+import re
+import requests
+from urllib.parse import quote
+from datetime import datetime, timezone, timedelta
 
-OK_STD_BASE = "https://op.ll.dovx.cf/OK影视/OK影视标准版"
-OK_PRO_BASE = "https://op.ll.dovx.cf/OK影视/OK影视Pro"
+BASE_PRO = "https://op.ll.dovx.cf/OK影视/OK影视Pro/"
+BASE_STD = "https://op.ll.dovx.cf/OK影视/OK影视标准版/"
 
-DOWNLOAD_DIR = "downloads"
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+OUT_DIR = "apk"
+os.makedirs(OUT_DIR, exist_ok=True)
 
-def find_latest_version(base_url):
-    print(f"扫描最新版本: {base_url}")
-    major, minor = 3, 7
-    latest = None
+session = requests.Session()
+session.headers.update({"User-Agent": "Mozilla/5.0"})
 
-    for patch in range(0, 30):
-        ver = f"{major}.{minor}.{patch}"
-        url = f"{base_url}/{ver}/标准版{ver}.txt"
-        r = requests.get(url)
-        if r.status_code == 200 and len(r.text) > 10:
-            latest = ver
-        else:
-            if latest:
-                break
 
-    if not latest:
-        raise Exception("未找到最新版本")
-
-    print("最新版本:", latest)
-    return latest
-
-def download_file(url, filename):
-    print("下载:", filename)
-    r = requests.get(url, stream=True)
+def get_latest_folder(url):
+    r = session.get(url, timeout=30)
     r.raise_for_status()
+    versions = re.findall(r'href="(\d+\.\d+\.\d+)/"', r.text)
+    versions.sort(key=lambda v: list(map(int, v.split("."))))
+    return versions[-1]
 
-    path = os.path.join(DOWNLOAD_DIR, filename)
-    total = int(r.headers.get("content-length", 0))
 
-    with open(path, "wb") as f, tqdm(
-        total=total,
-        unit="B",
-        unit_scale=True,
-        desc=filename
-    ) as pbar:
+def download(url, filename):
+    print("下载:", filename)
+    r = session.get(url, stream=True, timeout=60)
+    r.raise_for_status()
+    with open(os.path.join(OUT_DIR, filename), "wb") as f:
         for chunk in r.iter_content(8192):
             f.write(chunk)
-            pbar.update(len(chunk))
 
-def download_ok_standard():
-    version = find_latest_version(OK_STD_BASE)
-    base = f"{OK_STD_BASE}/{version}/"
 
-    files = {
-        f"海信专版-OK影视-{version}.apk": "hisense-tv-customized.apk",
-        f"mobile-arm64_v8a-{version}.apk": "mobile-arm64_v8a-ok.apk",
-        f"mobile-armeabi_v7a-{version}.apk": "mobile-arm64_v7a-ok.apk",
-        f"leanback-arm64_v8a-{version}.apk": "leanback-arm64_v8a-ok.apk",
-        f"leanback-armeabi_v7a-{version}.apk": "leanback-arm64_v7a-ok.apk",
-        f"标准版{version}.txt": "Version-OK.txt",
+# ===== 标准版 txt 更新日志 =====
+def fetch_update_log(version):
+    url = f"{BASE_STD}{version}/标准版{version}.txt"
+    r = session.get(url, timeout=30)
+
+    if r.status_code != 200 or not r.text.strip():
+        return "暂无更新日志"
+
+    logs = []
+    for line in r.text.splitlines():
+        line = line.strip().lstrip("*").strip()
+        if line:
+            logs.append(f"• {line}")
+
+    return "\n".join(sorted(set(logs)))
+
+
+# ===== Pro 版 =====
+def fetch_pro():
+    version = get_latest_folder(BASE_PRO)
+    folder = BASE_PRO + version + "/"
+
+    mapping = {
+        f"OK影视Pro-电视版-32位-{version}.apk": "pro-tv-32.apk",
+        f"OK影视Pro-电视版-64位-{version}.apk": "pro-tv-64.apk",
+        f"OK影视Pro-手机版-{version} - 模拟器.apk": "pro-mobile-emulator.apk",
+        f"OK影视Pro-手机版-{version}.apk": "pro-mobile.apk",
     }
 
-    for remote, local in files.items():
-        try:
-            download_file(base + remote, local)
-        except:
-            print("跳过:", remote)
+    for src, dst in mapping.items():
+        download(folder + quote(src), dst)
 
-def download_ok_pro():
-    version = find_latest_version(OK_PRO_BASE)
-    base = f"{OK_PRO_BASE}/{version}/"
+    return version
 
-    for name in [
-        f"OK影视Pro-电视版-64位-{version}.apk",
-        f"OK影视Pro-电视版-32位-{version}.apk",
-        f"OK影视Pro-手机版-{version}.apk",
-    ]:
-        try:
-            download_file(base + name, name)
-        except:
-            print("跳过:", name)
+
+# ===== 标准版 =====
+def fetch_standard():
+    version = get_latest_folder(BASE_STD)
+    folder = BASE_STD + version + "/"
+
+    mapping = {
+        f"海信专版-OK影视-{version}.apk": "hisense-tv-universal.apk",
+        f"leanback-arm64_v8a-{version}.apk": "leanback-arm64_v8a.apk",
+        f"leanback-armeabi_v7a-{version}.apk": "leanback-armeabi_v7a.apk",
+        f"mobile-arm64_v8a-{version}.apk": "mobile-arm64_v8a.apk",
+        f"mobile-armeabi_v7a-{version}.apk": "mobile-armeabi_v7a.apk",
+    }
+
+    for src, dst in mapping.items():
+        download(folder + quote(src), dst)
+
+    return version
+
+
+# ===== 生成 caption =====
+def generate_caption(std_v, pro_v, logs):
+    beijing = datetime.now(timezone(timedelta(hours=8)))
+    time_str = beijing.strftime("%Y/%m/%d %H:%M")
+
+    caption = f"""
+OK影视自动更新
+
+本次更新：
+{logs}
+
+标准版：{std_v}
+Pro版：{pro_v}
+更新时间：{time_str}
+""".strip()
+
+    with open("caption.txt", "w", encoding="utf-8") as f:
+        f.write(caption)
+
+    with open("latest_version.txt", "w") as f:
+        f.write(f"Pro:{pro_v}\nStd:{std_v}")
+
+    print(caption)
+
 
 def main():
-    print("开始下载 OK 标准版")
-    download_ok_standard()
+    pro_v = fetch_pro()
+    std_v = fetch_standard()
+    logs = fetch_update_log(std_v)
+    generate_caption(std_v, pro_v, logs)
+    print("全部完成")
 
-    print("\n开始下载 OK Pro版")
-    download_ok_pro()
-
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    print("\n完成时间:", ts)
 
 if __name__ == "__main__":
     main()
