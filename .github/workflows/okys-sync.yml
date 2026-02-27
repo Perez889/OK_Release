@@ -1,56 +1,191 @@
 name: OK影视自动更新
 
 on:
-  workflow_dispatch
+  schedule:
+    - cron: "0 */6 * * *"  # 每 6 小时
+  workflow_dispatch:
 
 jobs:
   update:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v3
 
-      - name: Install Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.11"
+      - name: 安装依赖
+        run: |
+          sudo apt update
+          sudo apt install -y python3 python3-pip jq curl
 
-      - name: Install dependencies
-        run: pip install requests tqdm
+      - name: 下载并生成 APK
+        run: |
+          mkdir -p scripts downloads
+          cat > scripts/fetch_ok.py << 'EOF'
+import os, re, requests
+from urllib.parse import unquote
+from datetime import datetime, timezone, timedelta
 
-      - name: Run downloader
-        run: python scripts/download_ok.py
+HEADERS = {"User-Agent": "Mozilla/5.0"}
+DOWNLOAD_DIR = "downloads"
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-      - name: Check downloaded files
+STD_BASE = "https://op.ll.dovx.cf/d/APP/OK影视/OK影视标准版"
+PRO_BASE = "https://op.ll.dovx.cf/d/APP/OK影视/OK影视Pro"
+
+def get_latest_version(base_url, keyword="标准版"):
+    html = requests.get(base_url, headers=HEADERS).text
+    versions = re.findall(r'>(\d+\.\d+\.\d+)/<', html)
+    if not versions:
+        raise Exception(f"未找到 {keyword} 版本")
+    versions.sort(key=lambda v: list(map(int, v.split('.'))))
+    return versions[-1]
+
+def extract_apk_links(txt_url):
+    r = requests.get(txt_url, headers=HEADERS)
+    if r.status_code != 200:
+        raise Exception(f"未找到 TXT 文件: {txt_url}")
+    urls = re.findall(r"https://[^\s]+?\.apk[^\s]*", r.text)
+    return [unquote(u) for u in urls]
+
+def download_files(urls, mapping):
+    downloaded = []
+    for url in urls:
+        for key, name in mapping.items():
+            if key in url:
+                path = os.path.join(DOWNLOAD_DIR, name)
+                print("下载:", name)
+                r = requests.get(url, headers=HEADERS, stream=True)
+                r.raise_for_status()
+                with open(path, "wb") as f:
+                    for chunk in r.iter_content(8192):
+                        f.write(chunk)
+                downloaded.append(name)
+    return downloaded
+
+def generate_caption(std_ver, pro_ver):
+    beijing = datetime.now(timezone(timedelta(hours=8)))
+    ts = beijing.strftime("%Y/%m/%d %H:%M")
+    caption_std = f"📢 OK影视 标准版更新\n版本: {std_ver}\n更新时间: {ts}"
+    caption_pro = f"📢 OK影视 Pro版更新\n版本: {pro_ver}\n更新时间: {ts}"
+    with open("caption_std.txt", "w", encoding="utf-8") as f:
+        f.write(caption_std)
+    with open("caption_pro.txt", "w", encoding="utf-8") as f:
+        f.write(caption_pro)
+    with open("latest_version.txt", "w", encoding="utf-8") as f:
+        f.write(f"Std:{std_ver}\nPro:{pro_ver}")
+    return caption_std, caption_pro
+
+def main():
+    # 标准版
+    std_ver = get_latest_version(STD_BASE, "标准版")
+    std_txt = f"{STD_BASE}/{std_ver}/标准版{std_ver}.txt"
+    std_links = extract_apk_links(std_txt)
+    std_map = {
+        "海信专版": "hisense-tv-universal-ok.apk",
+        "leanback-arm64_v8a": "leanback-arm64_v8a-ok.apk",
+        "leanback-armeabi_v7a": "leanback-armeabi_v7a-ok.apk",
+        "mobile-arm64_v8a": "mobile-arm64_v8a-ok.apk",
+        "mobile-armeabi_v7a": "mobile-armeabi_v7a-ok.apk",
+    }
+    downloaded_std = download_files(std_links, std_map)
+
+    # Pro版
+    pro_ver = get_latest_version(PRO_BASE, "Pro版")
+    pro_txt = f"{PRO_BASE}/Pro版{pro_ver}.txt"
+    pro_links = extract_apk_links(pro_txt)
+    pro_map = {
+        "电视版-32位": "leanback-armeabi_v7a-pro.apk",
+        "电视版-64位": "leanback-arm64_v8a-pro.apk",
+        "手机版 - 模拟器": "mobile-armeabi_v7a-pro.apk",
+        "手机版": "mobile-arm64_v8a-pro.apk",
+    }
+    downloaded_pro = download_files(pro_links, pro_map)
+
+    caption_std, caption_pro = generate_caption(std_ver, pro_ver)
+    print("下载完成\n", caption_std, "\n", caption_pro)
+    return downloaded_std, downloaded_pro
+
+if __name__ == "__main__":
+    main()
+EOF
+
+          python3 scripts/fetch_ok.py
+
+      - name: 检查是否有更新
         id: check
         run: |
-          COUNT=$(ls downloads/*.apk 2>/dev/null | wc -l || true)
-          echo "count=$COUNT" >> $GITHUB_OUTPUT
-          if [ "$COUNT" -eq 0 ]; then
-            echo "没有下载到 APK"
+          if [ -f last_version.txt ]; then
+            LAST=$(cat last_version.txt)
+            LATEST=$(cat latest_version.txt)
+            if [ "$LAST" = "$LATEST" ]; then
+              echo "changed=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
           fi
+          echo "changed=true" >> $GITHUB_OUTPUT
 
-      - name: Push to Telegram
-        if: steps.check.outputs.count != '0'
+      - name: 推送标准版到 Telegram
+        if: steps.check.outputs.changed == 'true'
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
           BOT_API_BASE: ${{ secrets.TELEGRAM_API_BASE }}
         run: |
-          for file in downloads/*.apk; do
-            echo "发送 $file"
-            curl -s -X POST "$BOT_API_BASE/bot$BOT_TOKEN/sendDocument" \
-              -F chat_id="$CHAT_ID" \
-              -F caption="OK影视自动更新" \
-              -F document=@"$file"
+          cd downloads
+          files=( "hisense-tv-universal-ok.apk" "leanback-arm64_v8a-ok.apk" "leanback-armeabi_v7a-ok.apk" "mobile-arm64_v8a-ok.apk" "mobile-armeabi_v7a-ok.apk" )
+          last_index=$(( ${#files[@]} - 1 ))
+          media="["
+          for i in "${!files[@]}"; do
+            if [ $i -eq $last_index ]; then
+              media+="{\"type\":\"document\",\"media\":\"attach://${files[i]}\",\"caption\":\"$(cat ../caption_std.txt)\"}"
+            else
+              media+="{\"type\":\"document\",\"media\":\"attach://${files[i]}\"},"
+            fi
           done
+          media+="]"
+          curl -s -X POST "$BOT_API_BASE/bot$BOT_TOKEN/sendMediaGroup" \
+            -F chat_id="$CHAT_ID" \
+            -F media="$media" \
+            -F "hisense-tv-universal-ok.apk=@hisense-tv-universal-ok.apk" \
+            -F "leanback-arm64_v8a-ok.apk=@leanback-arm64_v8a-ok.apk" \
+            -F "leanback-armeabi_v7a-ok.apk=@leanback-armeabi_v7a-ok.apk" \
+            -F "mobile-arm64_v8a-ok.apk=@mobile-arm64_v8a-ok.apk" \
+            -F "mobile-armeabi_v7a-ok.apk=@mobile-armeabi_v7a-ok.apk"
 
-      - name: Save timestamp
-        if: steps.check.outputs.count != '0'
+      - name: 推送 Pro 版到 Telegram
+        if: steps.check.outputs.changed == 'true'
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          BOT_API_BASE: ${{ secrets.TELEGRAM_API_BASE }}
         run: |
-          date > last_update.txt
+          cd downloads
+          files=( "leanback-armeabi_v7a-pro.apk" "leanback-arm64_v8a-pro.apk" "mobile-armeabi_v7a-pro.apk" "mobile-arm64_v8a-pro.apk" )
+          last_index=$(( ${#files[@]} - 1 ))
+          media="["
+          for i in "${!files[@]}"; do
+            if [ $i -eq $last_index ]; then
+              media+="{\"type\":\"document\",\"media\":\"attach://${files[i]}\",\"caption\":\"$(cat ../caption_pro.txt)\"}"
+            else
+              media+="{\"type\":\"document\",\"media\":\"attach://${files[i]}\"},"
+            fi
+          done
+          media+="]"
+          curl -s -X POST "$BOT_API_BASE/bot$BOT_TOKEN/sendMediaGroup" \
+            -F chat_id="$CHAT_ID" \
+            -F media="$media" \
+            -F "leanback-armeabi_v7a-pro.apk=@leanback-armeabi_v7a-pro.apk" \
+            -F "leanback-arm64_v8a-pro.apk=@leanback-arm64_v8a-pro.apk" \
+            -F "mobile-armeabi_v7a-pro.apk=@mobile-armeabi_v7a-pro.apk" \
+            -F "mobile-arm64_v8a-pro.apk=@mobile-arm64_v8a-pro.apk"
+
+      - name: 保存版本号
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          cp latest_version.txt last_version.txt
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git add last_update.txt
-          git commit -m "update ok影视" || true
+          git add last_version.txt
+          git commit -m "更新版本号到 $(cat latest_version.txt)" || true
           git push || true
