@@ -1,97 +1,56 @@
 name: OK影视自动更新
 
 on:
-  schedule:
-    - cron: "0 */6 * * *"  # 每 6 小时
-  workflow_dispatch:
+  workflow_dispatch
 
 jobs:
   update:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-      - name: 安装依赖
-        run: |
-          sudo apt update
-          sudo apt install -y python3 python3-pip jq curl
+      - name: Install Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
 
-      - name: 下载 APK 并生成更新日志
-        run: |
-          python3 scripts/download_ok.py
+      - name: Install dependencies
+        run: pip install requests tqdm
 
-      - name: 检查版本是否变化
+      - name: Run downloader
+        run: python scripts/download_ok.py
+
+      - name: Check downloaded files
         id: check
         run: |
-          if [ -f last_version.txt ]; then
-            LAST=$(cat last_version.txt)
-            LATEST_STD=$(cat downloads/caption-标准版.txt | grep 版本 | awk -F'：' '{print $2}' | tr -d ' ')
-            LATEST_PRO=$(cat downloads/caption-Pro版.txt | grep 版本 | awk -F'：' '{print $2}' | tr -d ' ')
-            if [ "$LAST" = "$LATEST_STD,$LATEST_PRO" ]; then
-              echo "changed=false" >> $GITHUB_OUTPUT
-              exit 0
-            fi
+          COUNT=$(ls downloads/*.apk 2>/dev/null | wc -l || true)
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
+          if [ "$COUNT" -eq 0 ]; then
+            echo "没有下载到 APK"
           fi
-          echo "changed=true" >> $GITHUB_OUTPUT
 
-      - name: 推送标准版到 Telegram
-        if: steps.check.outputs.changed == 'true'
+      - name: Push to Telegram
+        if: steps.check.outputs.count != '0'
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
           BOT_API_BASE: ${{ secrets.TELEGRAM_API_BASE }}
         run: |
-          cd downloads
-          media='[
-            {"type":"document", "media":"attach://hisense-tv-universal-ok.apk"},
-            {"type":"document", "media":"attach://leanback-arm64_v8a-ok.apk"},
-            {"type":"document", "media":"attach://leanback-armeabi_v7a-ok.apk"},
-            {"type":"document", "media":"attach://mobile-arm64_v8a-ok.apk"},
-            {"type":"document", "media":"attach://mobile-armeabi_v7a-ok.apk", "caption":"'"$(cat caption-标准版.txt)"'"}
-          ]'
-          response=$(curl -s -X POST "$BOT_API_BASE/bot$BOT_TOKEN/sendMediaGroup" \
-            -F chat_id="$CHAT_ID" \
-            -F media="$media" \
-            -F "hisense-tv-universal-ok.apk=@hisense-tv-universal-ok.apk" \
-            -F "leanback-arm64_v8a-ok.apk=@leanback-arm64_v8a-ok.apk" \
-            -F "leanback-armeabi_v7a-ok.apk=@leanback-armeabi_v7a-ok.apk" \
-            -F "mobile-arm64_v8a-ok.apk=@mobile-arm64_v8a-ok.apk" \
-            -F "mobile-armeabi_v7a-ok.apk=@mobile-armeabi_v7a-ok.apk")
-          echo "Telegram 响应: $response"
+          for file in downloads/*.apk; do
+            echo "发送 $file"
+            curl -s -X POST "$BOT_API_BASE/bot$BOT_TOKEN/sendDocument" \
+              -F chat_id="$CHAT_ID" \
+              -F caption="OK影视自动更新" \
+              -F document=@"$file"
+          done
 
-      - name: 推送 Pro 版到 Telegram
-        if: steps.check.outputs.changed == 'true'
-        env:
-          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
-          BOT_API_BASE: ${{ secrets.TELEGRAM_API_BASE }}
+      - name: Save timestamp
+        if: steps.check.outputs.count != '0'
         run: |
-          cd downloads
-          media='[
-            {"type":"document", "media":"attach://leanback-armeabi_v7a-pro.apk"},
-            {"type":"document", "media":"attach://leanback-arm64_v8a-pro.apk"},
-            {"type":"document", "media":"attach://mobile-armeabi_v7a-pro.apk"},
-            {"type":"document", "media":"attach://mobile-arm64_v8a-pro.apk", "caption":"'"$(cat caption-Pro版.txt)"'"}
-          ]'
-          response=$(curl -s -X POST "$BOT_API_BASE/bot$BOT_TOKEN/sendMediaGroup" \
-            -F chat_id="$CHAT_ID" \
-            -F media="$media" \
-            -F "leanback-armeabi_v7a-pro.apk=@leanback-armeabi_v7a-pro.apk" \
-            -F "leanback-arm64_v8a-pro.apk=@leanback-arm64_v8a-pro.apk" \
-            -F "mobile-armeabi_v7a-pro.apk=@mobile-armeabi_v7a-pro.apk" \
-            -F "mobile-arm64_v8a-pro.apk=@mobile-arm64_v8a-pro.apk")
-          echo "Telegram 响应: $response"
-
-      - name: 保存最新版本号
-        if: steps.check.outputs.changed == 'true'
-        run: |
-          STD_VER=$(cat downloads/caption-标准版.txt | grep 版本 | awk -F'：' '{print $2}' | tr -d ' ')
-          PRO_VER=$(cat downloads/caption-Pro版.txt | grep 版本 | awk -F'：' '{print $2}' | tr -d ' ')
-          echo "${STD_VER},${PRO_VER}" > last_version.txt
+          date > last_update.txt
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git add last_version.txt
-          git commit -m "更新版本号到 ${STD_VER},${PRO_VER}" || true
+          git add last_update.txt
+          git commit -m "update ok影视" || true
           git push || true
