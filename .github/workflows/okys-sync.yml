@@ -1,17 +1,14 @@
 name: OK影视自动更新
 
 on:
-  workflow_dispatch:
-  #schedule:
-  #  - cron: "0 */6 * * *"
+  workflow_dispatch
 
 jobs:
   update:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
       - name: Install tools
         run: |
@@ -19,7 +16,6 @@ jobs:
           sudo apt-get install -y wget curl jq opencc
 
       - name: Detect latest version
-        id: detect
         run: |
           BASE="https://op.ll.dovx.cf/OK影视/OK影视标准版"
           START_MAJOR=3
@@ -35,7 +31,6 @@ jobs:
             CONTENT=$(curl -fsL "$URL" || true)
 
             if [ -n "$CONTENT" ] && [ "$(echo "$CONTENT" | wc -c)" -gt 10 ]; then
-              echo "发现真实版本：$VERSION"
               LATEST_VERSION="$VERSION"
               FOUND_FIRST="true"
             else
@@ -65,43 +60,13 @@ jobs:
           fi
           echo "changed=true" >> $GITHUB_OUTPUT
 
-      - name: 获取更新日志
-        if: steps.check.outputs.changed == 'true'
-        run: |
-          LOG_URL="https://op.ll.dovx.cf/OK影视/OK影视标准版/${LATEST_VERSION}/标准版${LATEST_VERSION}.txt"
-          RAW_LOG=$(curl -fsL "$LOG_URL" || true)
-
-          if [ -z "$RAW_LOG" ]; then
-            RAW_LOG="暂无更新日志"
-          fi
-
-          MERGED_LOGS=$(echo "$RAW_LOG" | sed 's/^\* //g' | sed '/^$/d' | sort | uniq | sed 's/^/• /g' | opencc -c t2s.json)
-          UPDATE_TIME=$(TZ=Asia/Shanghai date '+%Y/%m/%d %H:%M')
-
-          CAPTION="OK影视更新发布
-
-- 本次更新：
-$MERGED_LOGS
-
-- 当前版本：$LATEST_VERSION
-- 更新时间：$UPDATE_TIME"
-
-          echo "CAPTION<<EOF" >> $GITHUB_ENV
-          echo "$CAPTION" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
-
-      - name: Download APK files
+      - name: Download APK
         if: steps.check.outputs.changed == 'true'
         run: |
           BASE="https://op.ll.dovx.cf/OK影视/OK影视标准版/$LATEST_VERSION/"
           mkdir -p apk
           cd apk
-
-          wget -q "${BASE}海信专版-OK影视-$LATEST_VERSION.apk" -O hisense-tv-customized-ok.apk
-          wget -q "${BASE}leanback-arm64_v8a-$LATEST_VERSION.apk" -O leanback-arm64_v8a-ok.apk
-          wget -q "${BASE}leanback-armeabi_v7a-$LATEST_VERSION.apk" -O leanback-armeabi_v7a-ok.apk
-          wget -q "${BASE}mobile-arm64_v8a-$LATEST_VERSION.apk" -O mobile-arm64_v8a-ok.apk
-          wget -q "${BASE}mobile-armeabi_v7a-$LATEST_VERSION.apk" -O mobile-armeabi_v7a-ok.apk
+          wget -q "${BASE}mobile-arm64_v8a-$LATEST_VERSION.apk" -O ok.apk
 
       - name: Push to Telegram
         if: steps.check.outputs.changed == 'true'
@@ -112,40 +77,33 @@ $MERGED_LOGS
         run: |
           set -e
 
+          CAPTION="OK影视更新：$LATEST_VERSION"
+
           ESCAPED_CAPTION=$(printf '%s' "$CAPTION" | jq -Rs .)
 
-          MEDIA_JSON="[
-            {\"type\":\"document\",\"media\":\"attach://hisense-tv-customized-ok.apk\"},
-            {\"type\":\"document\",\"media\":\"attach://leanback-arm64_v8a-ok.apk\"},
-            {\"type\":\"document\",\"media\":\"attach://leanback-armeabi_v7a-ok.apk\"},
-            {\"type\":\"document\",\"media\":\"attach://mobile-arm64_v8a-ok.apk\"},
-            {\"type\":\"document\",\"media\":\"attach://mobile-armeabi_v7a-ok.apk\",\"caption\":$ESCAPED_CAPTION}
-          ]"
+          read -r -d '' MEDIA_JSON <<EOF
+[
+  {
+    "type": "document",
+    "media": "attach://ok.apk",
+    "caption": $ESCAPED_CAPTION
+  }
+]
+EOF
 
           response=$(curl -s -X POST "$BOT_API_BASE/bot$BOT_TOKEN/sendMediaGroup" \
             -F chat_id="$CHAT_ID" \
             -F media="$MEDIA_JSON" \
-            -F "hisense-tv-customized-ok.apk=@apk/hisense-tv-customized-ok.apk" \
-            -F "leanback-arm64_v8a-ok.apk=@apk/leanback-arm64_v8a-ok.apk" \
-            -F "leanback-armeabi_v7a-ok.apk=@apk/leanback-armeabi_v7a-ok.apk" \
-            -F "mobile-arm64_v8a-ok.apk=@apk/mobile-arm64_v8a-ok.apk" \
-            -F "mobile-armeabi_v7a-ok.apk=@apk/mobile-armeabi_v7a-ok.apk")
+            -F "ok.apk=@apk/ok.apk")
 
-          echo "Telegram 响应: $response"
+          echo "$response"
 
-          if echo "$response" | grep -q '"ok":true'; then
-            echo "Telegram 推送成功"
-          else
-            echo "Telegram 推送失败"
-            exit 1
-          fi
-
-      - name: Save new version
+      - name: Save version
         if: steps.check.outputs.changed == 'true'
         run: |
           cp latest_version.txt last_version.txt
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add last_version.txt
-          git commit -m "更新版本号到 $LATEST_VERSION" || echo "无变更"
-          git push || echo "无需推送"
+          git commit -m "update $LATEST_VERSION" || true
+          git push || true
