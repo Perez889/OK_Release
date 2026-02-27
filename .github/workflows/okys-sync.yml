@@ -1,9 +1,9 @@
 name: OK影视自动更新
 
-#on:
-  #schedule:
-    #- cron: "0 */6 * * *"
+on:
   workflow_dispatch:
+  #schedule:
+  #  - cron: "0 */6 * * *"
 
 jobs:
   update:
@@ -15,10 +15,11 @@ jobs:
 
       - name: Install tools
         run: |
-          sudo apt update
-          sudo apt install -y wget curl jq opencc python3
+          sudo apt-get update
+          sudo apt-get install -y wget curl jq opencc
 
       - name: Detect latest version
+        id: detect
         run: |
           BASE="https://op.ll.dovx.cf/OK影视/OK影视标准版"
           START_MAJOR=3
@@ -31,7 +32,8 @@ jobs:
           for PATCH in $(seq $START_PATCH 20); do
             VERSION="${START_MAJOR}.${START_MINOR}.${PATCH}"
             URL="${BASE}/${VERSION}/标准版${VERSION}.txt"
-            CONTENT=$(curl -s "$URL")
+            CONTENT=$(curl -fsL "$URL" || true)
+
             if [ -n "$CONTENT" ] && [ "$(echo "$CONTENT" | wc -c)" -gt 10 ]; then
               echo "发现真实版本：$VERSION"
               LATEST_VERSION="$VERSION"
@@ -48,9 +50,8 @@ jobs:
             exit 1
           fi
 
-          echo "最终最新版本：$LATEST_VERSION"
-          echo "$LATEST_VERSION" > latest_version.txt
           echo "LATEST_VERSION=$LATEST_VERSION" >> $GITHUB_ENV
+          echo "$LATEST_VERSION" > latest_version.txt
 
       - name: Compare version
         id: check
@@ -68,19 +69,26 @@ jobs:
         if: steps.check.outputs.changed == 'true'
         run: |
           LOG_URL="https://op.ll.dovx.cf/OK影视/OK影视标准版/${LATEST_VERSION}/标准版${LATEST_VERSION}.txt"
-          RAW_LOG=$(curl -s "$LOG_URL")
+          RAW_LOG=$(curl -fsL "$LOG_URL" || true)
+
           if [ -z "$RAW_LOG" ]; then
             RAW_LOG="暂无更新日志"
           fi
+
           MERGED_LOGS=$(echo "$RAW_LOG" | sed 's/^\* //g' | sed '/^$/d' | sort | uniq | sed 's/^/• /g' | opencc -c t2s.json)
           UPDATE_TIME=$(TZ=Asia/Shanghai date '+%Y/%m/%d %H:%M')
-          CAPTION="OK影视更新发布\n\n- 本次更新：\n$MERGED_LOGS\n\n- 当前版本：$LATEST_VERSION\n- 更新时间：$UPDATE_TIME"
 
-          {
-            echo "CAPTION<<EOF"
-            echo "$CAPTION"
-            echo "EOF"
-          } >> $GITHUB_ENV
+          CAPTION="OK影视更新发布
+
+- 本次更新：
+$MERGED_LOGS
+
+- 当前版本：$LATEST_VERSION
+- 更新时间：$UPDATE_TIME"
+
+          echo "CAPTION<<EOF" >> $GITHUB_ENV
+          echo "$CAPTION" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
 
       - name: Download APK files
         if: steps.check.outputs.changed == 'true'
@@ -88,6 +96,7 @@ jobs:
           BASE="https://op.ll.dovx.cf/OK影视/OK影视标准版/$LATEST_VERSION/"
           mkdir -p apk
           cd apk
+
           wget -q "${BASE}海信专版-OK影视-$LATEST_VERSION.apk" -O hisense-tv-customized-ok.apk
           wget -q "${BASE}leanback-arm64_v8a-$LATEST_VERSION.apk" -O leanback-arm64_v8a-ok.apk
           wget -q "${BASE}leanback-armeabi_v7a-$LATEST_VERSION.apk" -O leanback-armeabi_v7a-ok.apk
@@ -103,7 +112,7 @@ jobs:
         run: |
           set -e
 
-          ESCAPED_CAPTION=$(printf '%s' "$CAPTION" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
+          ESCAPED_CAPTION=$(printf '%s' "$CAPTION" | jq -Rs .)
 
           MEDIA_JSON="[
             {\"type\":\"document\",\"media\":\"attach://hisense-tv-customized-ok.apk\"},
