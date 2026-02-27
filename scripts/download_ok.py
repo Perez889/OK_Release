@@ -77,7 +77,7 @@ def main():
         "mobile-arm64_v8a": "mobile-arm64_v8a-ok.apk",
         "mobile-armeabi_v7a": "mobile-armeabi_v7a-ok.apk",
     }
-    downloaded_std = download_files(std_links, std_map)
+    download_files(std_links, std_map)
 
     # Pro版
     pro_ver = get_latest_version(PRO_BASE, "Pro版")
@@ -90,8 +90,11 @@ def main():
         "手机版 - 模拟器": "mobile-armeabi_v7a-pro.apk",
         "手机版": "mobile-arm64_v8a-pro.apk",
     }
-    downloaded_pro = download_files(pro_links, pro_map)
+    download_files(pro_links, pro_map)
 
     caption_std, caption_pro = generate_caption(std_ver, pro_ver, std_log, pro_log)
     print("下载完成\n", caption_std, "\n", caption_pro)
-    return downloaded_std, downloaded_pro
+    return caption_std, caption_pro
+
+if __name__ == "__main__":
+    main()
