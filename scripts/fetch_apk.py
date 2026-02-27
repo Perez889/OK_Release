@@ -4,16 +4,18 @@ import requests
 from urllib.parse import quote
 from datetime import datetime, timezone, timedelta
 
-# ===== 配置 =====
+# ======================= 配置 =======================
 BASE_PRO = "https://op.ll.dovx.cf/OK影视/OK影视Pro/"
 BASE_STD = "https://op.ll.dovx.cf/OK影视/OK影视标准版/"
+
 OUT_DIR = "apk"
 os.makedirs(OUT_DIR, exist_ok=True)
 
 session = requests.Session()
 session.headers.update({"User-Agent": "Mozilla/5.0"})
 
-# ===== 下载函数 =====
+
+# ======================= 下载函数 =======================
 def download(url, filename):
     print("下载:", filename)
     r = session.get(url, stream=True, timeout=60)
@@ -22,22 +24,25 @@ def download(url, filename):
         for chunk in r.iter_content(8192):
             f.write(chunk)
 
-# ===== Pro 版获取最新版本 =====
+
+# ======================= Pro 版 =======================
 def get_pro_latest_version():
     r = session.get(BASE_PRO, timeout=30)
     r.raise_for_status()
-    # 匹配 OK影视Pro-电视版-32位-5.0.1.apk 中的版本号
-    versions = re.findall(r'OK影视Pro-电视版-32位-(\d+\.\d+\.\d+)\.apk', r.text)
+    html = r.text
+
+    # 匹配 Pro 电视版 APK 文件名提取版本
+    versions = re.findall(
+        r'OK影视Pro-电视版-(?:32位|64位)-(\d+\.\d+\.\d+)\.apk', html
+    )
     if not versions:
         raise RuntimeError("未找到 Pro 版本")
-    versions.sort(key=lambda v: list(map(int, v.split("."))))
+    versions = sorted(set(versions), key=lambda v: list(map(int, v.split("."))))
     return versions[-1]
 
-# ===== Pro 版下载 =====
+
 def fetch_pro():
     version = get_pro_latest_version()
-    folder = BASE_PRO + version + "/"
-
     mapping = {
         f"OK影视Pro-电视版-32位-{version}.apk": "leanback-armeabi_v7a-pro.apk",
         f"OK影视Pro-电视版-64位-{version}.apk": "leanback-arm64_v8a-pro.apk",
@@ -46,24 +51,24 @@ def fetch_pro():
     }
 
     for src, dst in mapping.items():
-        download(folder + quote(src), dst)
+        download(BASE_PRO + quote(src), dst)
 
     return version
 
-# ===== 标准版获取最新版本 =====
-def get_std_latest_folder():
+
+# ======================= 标准版 =======================
+def get_std_latest_version():
     r = session.get(BASE_STD, timeout=30)
     r.raise_for_status()
-    # 匹配 x.x.x/ 目录
     versions = re.findall(r'href="(\d+\.\d+\.\d+)/"', r.text)
     if not versions:
-        raise RuntimeError(f"未找到标准版目录: {BASE_STD}")
+        raise RuntimeError(f"未找到标准版版本")
     versions.sort(key=lambda v: list(map(int, v.split("."))))
     return versions[-1]
 
-# ===== 标准版下载 =====
+
 def fetch_standard():
-    version = get_std_latest_folder()
+    version = get_std_latest_version()
     folder = BASE_STD + version + "/"
 
     mapping = {
@@ -79,7 +84,8 @@ def fetch_standard():
 
     return version
 
-# ===== 获取标准版更新日志 =====
+
+# ======================= 更新日志 =======================
 def fetch_update_log(version):
     url = f"{BASE_STD}{version}/标准版{version}.txt"
     r = session.get(url, timeout=30)
@@ -94,7 +100,8 @@ def fetch_update_log(version):
 
     return "\n".join(sorted(set(logs)))
 
-# ===== 生成 caption =====
+
+# ======================= 生成 caption =======================
 def generate_caption(std_v, pro_v, logs):
     beijing = datetime.now(timezone(timedelta(hours=8)))
     time_str = beijing.strftime("%Y/%m/%d %H:%M")
@@ -110,6 +117,7 @@ Pro版：{pro_v}
 更新时间：{time_str}
 """.strip()
 
+    # 保存 caption 和版本号文件
     with open("caption.txt", "w", encoding="utf-8") as f:
         f.write(caption)
 
@@ -118,13 +126,25 @@ Pro版：{pro_v}
 
     print(caption)
 
-# ===== 主函数 =====
+
+# ======================= 主流程 =======================
 def main():
-    pro_v = fetch_pro()
-    std_v = fetch_standard()
+    try:
+        pro_v = fetch_pro()
+    except Exception as e:
+        print("Pro 版下载失败:", e)
+        pro_v = "未知版本"
+
+    try:
+        std_v = fetch_standard()
+    except Exception as e:
+        print("标准版下载失败:", e)
+        std_v = "未知版本"
+
     logs = fetch_update_log(std_v)
     generate_caption(std_v, pro_v, logs)
     print("全部完成")
+
 
 if __name__ == "__main__":
     main()
