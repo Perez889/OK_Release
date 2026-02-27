@@ -22,9 +22,11 @@ jobs:
         id: check
         run: |
           if [ -f last_version.txt ]; then
-            LAST=$(cat last_version.txt)
-            LATEST=$(cat latest_version.txt)
-            if [ "$LAST" = "$LATEST" ]; then
+            LAST_STD=$(grep "^Std:" last_version.txt | cut -d':' -f2)
+            LAST_PRO=$(grep "^Pro:" last_version.txt | cut -d':' -f2)
+            LATEST_STD=$(grep "^Std:" latest_version.txt | cut -d':' -f2)
+            LATEST_PRO=$(grep "^Pro:" latest_version.txt | cut -d':' -f2)
+            if [ "$LAST_STD" = "$LATEST_STD" ] && [ "$LAST_PRO" = "$LATEST_PRO" ]; then
               echo "changed=false" >> $GITHUB_OUTPUT
               exit 0
             fi
@@ -40,11 +42,11 @@ jobs:
         run: |
           cd apk
           media='[
-            {"type":"document", "media":"attach://hisense-tv-universal-ok.apk"},
-            {"type":"document", "media":"attach://leanback-arm64_v8a-ok.apk"},
-            {"type":"document", "media":"attach://leanback-armeabi_v7a-ok.apk"},
-            {"type":"document", "media":"attach://mobile-arm64_v8a-ok.apk"},
-            {"type":"document", "media":"attach://mobile-armeabi_v7a-ok.apk", "caption":"'"$(cat ../caption.txt)"'"}
+            {"type":"document","media":"attach://hisense-tv-universal-ok.apk"},
+            {"type":"document","media":"attach://leanback-arm64_v8a-ok.apk"},
+            {"type":"document","media":"attach://leanback-armeabi_v7a-ok.apk"},
+            {"type":"document","media":"attach://mobile-arm64_v8a-ok.apk"},
+            {"type":"document","media":"attach://mobile-armeabi_v7a-ok.apk","caption":"'"$(cat ../caption.txt | jq -R .)"'"}
           ]'
           response=$(curl -s -X POST "$BOT_API_BASE/bot$BOT_TOKEN/sendMediaGroup" \
             -F chat_id="$CHAT_ID" \
@@ -65,10 +67,10 @@ jobs:
         run: |
           cd apk
           media='[
-            {"type":"document", "media":"attach://leanback-armeabi_v7a-pro.apk"},
-            {"type":"document", "media":"attach://leanback-arm64_v8a-pro.apk"},
-            {"type":"document", "media":"attach://mobile-armeabi_v7a-pro.apk"},
-            {"type":"document", "media":"attach://mobile-arm64_v8a-pro.apk", "caption":"'"$(cat ../caption.txt)"'"}
+            {"type":"document","media":"attach://leanback-armeabi_v7a-pro.apk"},
+            {"type":"document","media":"attach://leanback-arm64_v8a-pro.apk"},
+            {"type":"document","media":"attach://mobile-armeabi_v7a-pro.apk"},
+            {"type":"document","media":"attach://mobile-arm64_v8a-pro.apk","caption":"'"$(cat ../caption.txt | jq -R .)"'"}
           ]'
           response=$(curl -s -X POST "$BOT_API_BASE/bot$BOT_TOKEN/sendMediaGroup" \
             -F chat_id="$CHAT_ID" \
