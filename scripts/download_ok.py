@@ -1,112 +1,128 @@
 import os
 import re
 import requests
+from urllib.parse import urljoin, quote
 from datetime import datetime, timezone, timedelta
 
-# ---------- 配置区域 ----------
-STD_TXT_URL = "https://op.ll.dovx.cf/d/APP/OK影视/OK影视标准版/3.7.0/标准版3.7.0.txt?sign=XXX"
-PRO_TXT_URL = "https://op.ll.dovx.cf/d/APP/OK影视/OK影视Pro/Pro版5.0.1.txt?sign=XXX"
+# 基础目录
+STD_BASE_PAGE = "https://op.ll.dovx.cf/OK影视/OK影视标准版/"
+PRO_BASE_PAGE = "https://op.ll.dovx.cf/OK影视/OK影视Pro/"
 
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# APK 改名规则
-STD_MAP = {
-    "海信专版-OK影视": "hisense-tv-universal-ok.apk",
-    "leanback-arm64_v8a": "leanback-arm64_v8a-ok.apk",
-    "leanback-armeabi_v7a": "leanback-armeabi_v7a-ok.apk",
-    "mobile-arm64_v8a": "mobile-arm64_v8a-ok.apk",
-    "mobile-armeabi_v7a": "mobile-armeabi_v7a-ok.apk",
-}
+session = requests.Session()
+session.headers.update({"User-Agent": "Mozilla/5.0"})
 
-PRO_MAP = {
-    "OK影视Pro-电视版-32位": "leanback-armeabi_v7a-pro.apk",
-    "OK影视Pro-电视版-64位": "leanback-arm64_v8a-pro.apk",
-    "OK影视Pro-手机版-模拟器": "mobile-armeabi_v7a-pro.apk",
-    "OK影视Pro-手机版": "mobile-arm64_v8a-pro.apk",
-}
 
-# Telegram 配置
-BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.environ.get("TELEGRAM_CHANNEL_ID")
-BOT_API_BASE = os.environ.get("TELEGRAM_API_BASE", "https://api.telegram.org")
-
-# ---------- 辅助函数 ----------
-def fetch_txt(txt_url):
-    r = requests.get(txt_url, timeout=30)
+def fetch_html(url):
+    r = session.get(url, timeout=30)
     r.raise_for_status()
     return r.text
 
-def parse_apk_links(txt_content):
-    """提取 TXT 文件中的 APK 直链"""
-    urls = re.findall(r"https?://\S+\.apk\S*", txt_content)
+
+def get_latest_txt_url(base_page, keyword="标准版"):
+    """从目录 HTML 中获取最新 TXT 文件 URL"""
+    html = fetch_html(base_page)
+    # 匹配 txt 文件 href
+    matches = re.findall(r'href="([^"]+\.txt\?sign=[^"]+)"', html)
+    if not matches:
+        raise Exception(f"无法从目录获取 {keyword} TXT")
+    # 按版本号排序（取最后一个）
+    matches.sort(key=lambda x: [int(i) for i in re.findall(r"(\d+)", x)])
+    latest_txt = urljoin(base_page, matches[-1])
+    return latest_txt
+
+
+def fetch_txt(url):
+    r = session.get(url, timeout=30)
+    r.raise_for_status()
+    return r.text
+
+
+def parse_apk_links(txt_content, base_page):
+    """从 TXT 内容中匹配所有 APK 直连"""
+    # 匹配 .apk?sign= 的 URL
+    urls = re.findall(r'https://op\.ll\.dovx\.cf[^\s"]+\.apk\?sign=[^"\s]+', txt_content)
     return urls
 
-def download_apk(url, filename):
+
+def download_file(url, filename):
     path = os.path.join(DOWNLOAD_DIR, filename)
     if os.path.exists(path):
-        print(f"已存在，跳过 {filename}")
+        print(f"{filename} 已存在，跳过下载")
         return
-    print(f"下载 {filename} -> {url}")
-    r = requests.get(url, stream=True, timeout=60)
+    print(f"下载 {filename} -> {path}")
+    r = session.get(url, stream=True, timeout=60)
     r.raise_for_status()
     with open(path, "wb") as f:
         for chunk in r.iter_content(8192):
             f.write(chunk)
 
-def generate_caption(version, logs, name="OK影视"):
+
+def process_version(base_page, apk_map, keyword):
+    txt_url = get_latest_txt_url(base_page, keyword)
+    txt_content = fetch_txt(txt_url)
+
+    # 提取版本号
+    ver_match = re.search(r"(\d+\.\d+\.\d+)", txt_url)
+    version = ver_match.group(1) if ver_match else "未知版本"
+
+    apk_urls = parse_apk_links(txt_content, base_page)
+
+    downloaded_files = []
+    for url in apk_urls:
+        # 根据 APK 原名匹配新名
+        filename = url.split("/")[-1].split("?")[0]
+        new_name = apk_map.get(filename, filename)
+        download_file(url, new_name)
+        downloaded_files.append(new_name)
+
+    # 生成 caption
     beijing = datetime.now(timezone(timedelta(hours=8)))
     time_str = beijing.strftime("%Y/%m/%d %H:%M")
-    caption = f"{name} 自动更新\n版本：{version}\n更新时间：{time_str}\n本次更新：\n{logs}"
-    return caption
+    caption_lines = []
+    for line in txt_content.splitlines():
+        line = line.strip().lstrip("*").strip()
+        if line:
+            caption_lines.append(f"• {line}")
+    caption = "\n".join(caption_lines) or "暂无更新日志"
+    caption_full = f"{keyword} 自动更新\n本次更新：\n{caption}\n版本：{version}\n更新时间：{time_str}"
 
-def send_telegram(files, caption=None):
-    import json
-    media = []
-    for f in files[:-1]:
-        media.append({"type": "document", "media": f"attach://{f}"})
-    media.append({"type": "document", "media": f"attach://{files[-1]}", "caption": caption or ""})
-    data = {
-        "chat_id": CHAT_ID,
-        "media": json.dumps(media)
-    }
-    files_payload = {f: open(os.path.join(DOWNLOAD_DIR, f), "rb") for f in files}
-    r = requests.post(f"{BOT_API_BASE}/bot{BOT_TOKEN}/sendMediaGroup", data=data, files=files_payload)
-    print("Telegram 响应:", r.text)
-    for f in files:
-        files_payload[f].close()
+    return version, downloaded_files, caption_full
 
-# ---------- 主逻辑 ----------
-def process_version(txt_url, apk_map, name="OK影视"):
-    txt_content = fetch_txt(txt_url)
-    version_match = re.search(r"\d+\.\d+\.\d+", txt_content)
-    version = version_match.group() if version_match else "未知版本"
-    logs = "\n".join([f"• {line.strip('* ')}" for line in txt_content.splitlines() if line.strip()])
-    caption = generate_caption(version, logs, name)
-    
-    urls = parse_apk_links(txt_content)
-    files = []
-    for url in urls:
-        for key in apk_map:
-            if key in url:
-                filename = apk_map[key]
-                download_apk(url, filename)
-                files.append(filename)
-                break
-    return version, files, caption
 
 def main():
-    # 标准版
     print("==== 下载标准版 ====")
-    std_ver, std_files, std_caption = process_version(STD_TXT_URL, STD_MAP, "OK影视 标准版")
-    print(std_caption)
-    send_telegram(std_files, std_caption)
+    STD_MAP = {
+        "海信专版-OK影视-3.7.0.apk": "hisense-tv-universal-ok.apk",
+        "leanback-arm64_v8a-3.7.0.apk": "leanback-arm64_v8a-ok.apk",
+        "leanback-armeabi_v7a-3.7.0.apk": "leanback-armeabi_v7a-ok.apk",
+        "mobile-arm64_v8a-3.7.0.apk": "mobile-arm64_v8a-ok.apk",
+        "mobile-armeabi_v7a-3.7.0.apk": "mobile-armeabi_v7a-ok.apk",
+    }
+    std_ver, std_files, std_caption = process_version(STD_BASE_PAGE, STD_MAP, "OK影视 标准版")
 
-    # Pro版
-    print("==== 下载 Pro 版 ====")
-    pro_ver, pro_files, pro_caption = process_version(PRO_TXT_URL, PRO_MAP, "OK影视 Pro版")
-    print(pro_caption)
-    send_telegram(pro_files, pro_caption)
+    with open("caption_std.txt", "w", encoding="utf-8") as f:
+        f.write(std_caption)
+
+    print("\n==== 下载 Pro 版 ====")
+    PRO_MAP = {
+        "OK影视Pro-电视版-32位-5.0.1.apk": "leanback-armeabi_v7a-pro.apk",
+        "OK影视Pro-电视版-64位-5.0.1.apk": "leanback-arm64_v8a-pro.apk",
+        "OK影视Pro-手机版-5.0.1.apk": "mobile-arm64_v8a-pro.apk",
+        "OK影视Pro-手机版-5.0.1 - 模拟器.apk": "mobile-armeabi_v7a-pro.apk",
+    }
+    pro_ver, pro_files, pro_caption = process_version(PRO_BASE_PAGE, PRO_MAP, "OK影视 Pro版")
+
+    with open("caption_pro.txt", "w", encoding="utf-8") as f:
+        f.write(pro_caption)
+
+    print("\n标准版文件:", std_files)
+    print("Pro版文件:", pro_files)
+    print("\n标准版 caption:", std_caption)
+    print("\nPro版 caption:", pro_caption)
+
 
 if __name__ == "__main__":
     main()
