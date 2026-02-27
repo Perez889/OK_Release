@@ -1,21 +1,36 @@
-import os, re, requests
-from urllib.parse import unquote
+import os
+import re
+import requests
 from datetime import datetime, timezone, timedelta
+from urllib.parse import unquote
 
-HEADERS = {"User-Agent": "Mozilla/5.0"}
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-STD_BASE = "https://op.ll.dovx.cf/d/APP/OK影视/OK影视标准版"
-PRO_BASE = "https://op.ll.dovx.cf/d/APP/OK影视/OK影视Pro"
+# 基础 TXT 文件 URL 列表页面
+STD_LIST_URL = "https://op.ll.dovx.cf/d/APP/OK影视/OK影视标准版/"
+PRO_LIST_URL = "https://op.ll.dovx.cf/d/APP/OK影视/OK影视Pro/"
 
-def get_latest_version(base_url, keyword="标准版"):
-    html = requests.get(base_url, headers=HEADERS).text
-    versions = re.findall(r'>(\d+\.\d+\.\d+)/<', html)
-    if not versions:
-        raise Exception(f"未找到 {keyword} 版本")
-    versions.sort(key=lambda v: list(map(int, v.split('.'))))
-    return versions[-1]
+HEADERS = {"User-Agent": "Mozilla/5.0"}
+
+def get_latest_txt(list_url, keyword="标准版"):
+    """抓取最新 TXT 文件 URL"""
+    r = requests.get(list_url, headers=HEADERS)
+    if r.status_code != 200:
+        raise Exception(f"无法访问 {list_url}")
+    # 抓所有 TXT 链接
+    links = re.findall(r'https://[^\s]+?\.txt[^\s]*', r.text)
+    # 只保留匹配关键字的
+    filtered = [l for l in links if keyword in l]
+    if not filtered:
+        raise Exception(f"未找到 {keyword} TXT 文件")
+    # 按版本号排序（假设版本号形式是 x.y.z）
+    def ver_key(url):
+        m = re.search(r'(\d+\.\d+\.\d+)', url)
+        return [int(x) for x in m.group(1).split('.')] if m else [0,0,0]
+    filtered.sort(key=ver_key)
+    latest = filtered[-1]
+    return unquote(latest)
 
 def extract_apk_links(txt_url):
     r = requests.get(txt_url, headers=HEADERS)
@@ -66,10 +81,10 @@ def generate_caption(std_ver, pro_ver, std_log, pro_log):
 
 def main():
     # 标准版
-    std_ver = get_latest_version(STD_BASE, "标准版")
-    std_txt = f"{STD_BASE}/{std_ver}/标准版{std_ver}.txt"
-    std_links = extract_apk_links(std_txt)
-    std_log = extract_update_log(std_txt)
+    std_txt_url = get_latest_txt(STD_LIST_URL, "标准版")
+    std_ver = re.search(r'(\d+\.\d+\.\d+)', std_txt_url).group(1)
+    std_links = extract_apk_links(std_txt_url)
+    std_log = extract_update_log(std_txt_url)
     std_map = {
         "海信专版": "hisense-tv-universal-ok.apk",
         "leanback-arm64_v8a": "leanback-arm64_v8a-ok.apk",
@@ -80,10 +95,10 @@ def main():
     download_files(std_links, std_map)
 
     # Pro版
-    pro_ver = get_latest_version(PRO_BASE, "Pro版")
-    pro_txt = f"{PRO_BASE}/Pro版{pro_ver}.txt"
-    pro_links = extract_apk_links(pro_txt)
-    pro_log = extract_update_log(pro_txt)
+    pro_txt_url = get_latest_txt(PRO_LIST_URL, "Pro版")
+    pro_ver = re.search(r'(\d+\.\d+\.\d+)', pro_txt_url).group(1)
+    pro_links = extract_apk_links(pro_txt_url)
+    pro_log = extract_update_log(pro_txt_url)
     pro_map = {
         "电视版-32位": "leanback-armeabi_v7a-pro.apk",
         "电视版-64位": "leanback-arm64_v8a-pro.apk",
@@ -92,9 +107,8 @@ def main():
     }
     download_files(pro_links, pro_map)
 
-    caption_std, caption_pro = generate_caption(std_ver, pro_ver, std_log, pro_log)
-    print("下载完成\n", caption_std, "\n", caption_pro)
-    return caption_std, caption_pro
+    generate_caption(std_ver, pro_ver, std_log, pro_log)
+    print("下载完成，生成 caption 和 latest_version.txt")
 
 if __name__ == "__main__":
     main()
