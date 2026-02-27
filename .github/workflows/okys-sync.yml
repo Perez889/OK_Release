@@ -10,100 +10,47 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Install tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y wget curl jq opencc
+      - name: Install Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
 
-      - name: Detect latest version
-        run: |
-          BASE="https://op.ll.dovx.cf/OK影视/OK影视标准版"
-          START_MAJOR=3
-          START_MINOR=7
-          START_PATCH=0
+      - name: Install dependencies
+        run: pip install requests tqdm
 
-          LATEST_VERSION=""
-          FOUND_FIRST="false"
+      - name: Run downloader
+        run: python scripts/download_ok.py
 
-          for PATCH in $(seq $START_PATCH 20); do
-            VERSION="${START_MAJOR}.${START_MINOR}.${PATCH}"
-            URL="${BASE}/${VERSION}/标准版${VERSION}.txt"
-            CONTENT=$(curl -fsL "$URL" || true)
-
-            if [ -n "$CONTENT" ] && [ "$(echo "$CONTENT" | wc -c)" -gt 10 ]; then
-              LATEST_VERSION="$VERSION"
-              FOUND_FIRST="true"
-            else
-              if [ "$FOUND_FIRST" = "true" ]; then
-                break
-              fi
-            fi
-          done
-
-          if [ -z "$LATEST_VERSION" ]; then
-            echo "未找到版本"
-            exit 1
-          fi
-
-          echo "LATEST_VERSION=$LATEST_VERSION" >> $GITHUB_ENV
-          echo "$LATEST_VERSION" > latest_version.txt
-
-      - name: Compare version
+      - name: Check downloaded files
         id: check
         run: |
-          if [ -f last_version.txt ]; then
-            LAST=$(cat last_version.txt)
-            if [ "$LAST" = "$LATEST_VERSION" ]; then
-              echo "changed=false" >> $GITHUB_OUTPUT
-              exit 0
-            fi
+          COUNT=$(ls downloads/*.apk 2>/dev/null | wc -l || true)
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
+          if [ "$COUNT" -eq 0 ]; then
+            echo "没有下载到 APK"
           fi
-          echo "changed=true" >> $GITHUB_OUTPUT
-
-      - name: Download APK
-        if: steps.check.outputs.changed == 'true'
-        run: |
-          BASE="https://op.ll.dovx.cf/OK影视/OK影视标准版/$LATEST_VERSION/"
-          mkdir -p apk
-          cd apk
-          wget -q "${BASE}mobile-arm64_v8a-$LATEST_VERSION.apk" -O ok.apk
 
       - name: Push to Telegram
-        if: steps.check.outputs.changed == 'true'
+        if: steps.check.outputs.count != '0'
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHAT_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
           BOT_API_BASE: ${{ secrets.TELEGRAM_API_BASE }}
         run: |
-          set -e
+          for file in downloads/*.apk; do
+            echo "发送 $file"
+            curl -s -X POST "$BOT_API_BASE/bot$BOT_TOKEN/sendDocument" \
+              -F chat_id="$CHAT_ID" \
+              -F caption="OK影视自动更新" \
+              -F document=@"$file"
+          done
 
-          CAPTION="OK影视更新：$LATEST_VERSION"
-
-          ESCAPED_CAPTION=$(printf '%s' "$CAPTION" | jq -Rs .)
-
-          read -r -d '' MEDIA_JSON <<EOF
-[
-  {
-    "type": "document",
-    "media": "attach://ok.apk",
-    "caption": $ESCAPED_CAPTION
-  }
-]
-EOF
-
-          response=$(curl -s -X POST "$BOT_API_BASE/bot$BOT_TOKEN/sendMediaGroup" \
-            -F chat_id="$CHAT_ID" \
-            -F media="$MEDIA_JSON" \
-            -F "ok.apk=@apk/ok.apk")
-
-          echo "$response"
-
-      - name: Save version
-        if: steps.check.outputs.changed == 'true'
+      - name: Save timestamp
+        if: steps.check.outputs.count != '0'
         run: |
-          cp latest_version.txt last_version.txt
+          date > last_update.txt
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git add last_version.txt
-          git commit -m "update $LATEST_VERSION" || true
+          git add last_update.txt
+          git commit -m "update ok影视" || true
           git push || true
