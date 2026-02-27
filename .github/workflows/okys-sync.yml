@@ -10,179 +10,77 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Install tools
+      - name: 安装依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3 python3-pip curl jq opencc
+          sudo apt-get install -y python3 python3-pip jq opencc curl
 
-      - name: Download APKs and generate caption
+      - name: 下载 APK 并生成更新日志
         run: |
-          python3 - <<'EOF'
-import os, re, requests
-from urllib.parse import quote
-from datetime import datetime, timezone, timedelta
-import json
+          python3 fetch_apk.py
 
-BASE_PRO = "https://op.ll.dovx.cf/OK影视/OK影视Pro/"
-BASE_STD = "https://op.ll.dovx.cf/OK影视/OK影视标准版/"
-
-OUT_DIR = "apk"
-os.makedirs(OUT_DIR, exist_ok=True)
-
-session = requests.Session()
-session.headers.update({"User-Agent": "Mozilla/5.0"})
-
-def get_latest_folder(url):
-    r = session.get(url, timeout=30); r.raise_for_status()
-    versions = re.findall(r'href="(\d+\.\d+\.\d+)/"', r.text)
-    versions.sort(key=lambda v: list(map(int, v.split("."))))
-    return versions[-1]
-
-def download(url, filename):
-    print("下载:", filename)
-    r = session.get(url, stream=True, timeout=60); r.raise_for_status()
-    with open(os.path.join(OUT_DIR, filename), "wb") as f:
-        for chunk in r.iter_content(8192):
-            f.write(chunk)
-
-def fetch_pro():
-    version = get_latest_folder(BASE_PRO)
-    folder = BASE_PRO + version + "/"
-    mapping = {
-        f"OK影视Pro-电视版-32位-{version}.apk": "leanback-armeabi_v7a-pro.apk",
-        f"OK影视Pro-电视版-64位-{version}.apk": "leanback-arm64_v8a-pro.apk",
-        f"OK影视Pro-手机版-{version} - 模拟器.apk": "mobile-armeabi_v7a-pro.apk",
-        f"OK影视Pro-手机版-{version}.apk": "mobile-arm64_v8a-pro.apk",
-    }
-    for src, dst in mapping.items(): download(folder + quote(src), dst)
-    return version
-
-def fetch_standard():
-    version = get_latest_folder(BASE_STD)
-    folder = BASE_STD + version + "/"
-    mapping = {
-        f"海信专版-OK影视-{version}.apk": "hisense-tv-universal-ok.apk",
-        f"leanback-arm64_v8a-{version}.apk": "leanback-arm64_v8a-ok.apk",
-        f"leanback-armeabi_v7a-{version}.apk": "leanback-armeabi_v7a-ok.apk",
-        f"mobile-arm64_v8a-{version}.apk": "mobile-arm64_v8a-ok.apk",
-        f"mobile-armeabi_v7a-{version}.apk": "mobile-armeabi_v7a-ok.apk",
-    }
-    for src, dst in mapping.items(): download(folder + quote(src), dst)
-    return version
-
-def fetch_update_log(std_version, pro_version):
-    # 下载 FongMi JSON 日志
-    def fetch_json(url):
-        r = requests.get(url, timeout=30)
-        if r.status_code == 200:
-            return r.json()
-        return {}
-
-    leanback_json = fetch_json("https://raw.githubusercontent.com/FongMi/Release/fongmi/apk/leanback.json")
-    mobile_json = fetch_json("https://raw.githubusercontent.com/FongMi/Release/fongmi/apk/mobile.json")
-
-    desc_leanback = leanback_json.get("desc","")
-    desc_mobile = mobile_json.get("desc","")
-    logs = list(sorted(set(desc_leanback.splitlines() + desc_mobile.splitlines())))
-    logs = [f"• {l.lstrip('*').strip()}" for l in logs if l.strip()]
-    return "\n".join(logs) if logs else "暂无更新日志"
-
-def generate_caption(std_v, pro_v, logs):
-    beijing = datetime.now(timezone(timedelta(hours=8)))
-    time_str = beijing.strftime("%Y/%m/%d %H:%M")
-    caption = f"""
-- 影视 · 蜂蜜版
-
-- 本次更新：
-{logs}
-
-- 标准版：{std_v}
-- Pro版：{pro_v}
-- 更新时间：{time_str}
-""".strip()
-    with open("caption.txt","w",encoding="utf-8") as f: f.write(caption)
-    with open("latest_version.txt","w",encoding="utf-8") as f:
-        f.write(f"Pro:{pro_v}\nStd:{std_v}")
-    print(caption)
-
-def main():
-    pro_v = fetch_pro()
-    std_v = fetch_standard()
-    logs = fetch_update_log(std_v, pro_v)
-    generate_caption(std_v, pro_v, logs)
-    print("完成")
-
-if __name__ == "__main__": main()
-EOF
-
-      - name: Compare version
+      - name: 检查是否有更新
         id: check
         run: |
           if [ -f last_version.txt ]; then
             LAST=$(cat last_version.txt)
-            CURRENT=$(cat latest_version.txt)
-            if [ "$LAST" = "$CURRENT" ]; then
+            LATEST=$(cat latest_version.txt)
+            if [ "$LAST" = "$LATEST" ]; then
               echo "changed=false" >> $GITHUB_OUTPUT
               exit 0
             fi
           fi
           echo "changed=true" >> $GITHUB_OUTPUT
 
-      - name: Read caption
-        run: |
-          {
-            echo "caption<<EOF"
-            cat caption.txt
-            echo "EOF"
-          } >> $GITHUB_ENV
-
-      - name: Push Pro APKs to Telegram
+      - name: 推送标准版到 Telegram
         if: steps.check.outputs.changed == 'true'
         env:
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
-          BOT_API_BASE: ${{ secrets.BOT_API_BASE }}
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          BOT_API_BASE: ${{ secrets.TELEGRAM_API_BASE }}
         run: |
+          cd apk
           media='[
-            {"type":"document","media":"attach://leanback-armeabi_v7a-pro.apk"},
-            {"type":"document","media":"attach://leanback-arm64_v8a-pro.apk"},
-            {"type":"document","media":"attach://mobile-armeabi_v7a-pro.apk"},
-            {"type":"document","media":"attach://mobile-arm64_v8a-pro.apk","caption":"${{ env.caption }}"}
+            {"type":"document", "media":"attach://hisense-tv-universal-ok.apk"},
+            {"type":"document", "media":"attach://leanback-arm64_v8a-ok.apk"},
+            {"type":"document", "media":"attach://leanback-armeabi_v7a-ok.apk"},
+            {"type":"document", "media":"attach://mobile-arm64_v8a-ok.apk"},
+            {"type":"document", "media":"attach://mobile-armeabi_v7a-ok.apk", "caption":"'"$(cat ../caption.txt)"'"}
           ]'
-
-          curl -s -X POST "$BOT_API_BASE/bot$BOT_TOKEN/sendMediaGroup" \
+          response=$(curl -s -X POST "$BOT_API_BASE/bot$BOT_TOKEN/sendMediaGroup" \
             -F chat_id="$CHAT_ID" \
             -F media="$media" \
-            -F "leanback-armeabi_v7a-pro.apk=@apk/leanback-armeabi_v7a-pro.apk" \
-            -F "leanback-arm64_v8a-pro.apk=@apk/leanback-arm64_v8a-pro.apk" \
-            -F "mobile-armeabi_v7a-pro.apk=@apk/mobile-armeabi_v7a-pro.apk" \
-            -F "mobile-arm64_v8a-pro.apk=@apk/mobile-arm64_v8a-pro.apk"
+            -F "hisense-tv-universal-ok.apk=@hisense-tv-universal-ok.apk" \
+            -F "leanback-arm64_v8a-ok.apk=@leanback-arm64_v8a-ok.apk" \
+            -F "leanback-armeabi_v7a-ok.apk=@leanback-armeabi_v7a-ok.apk" \
+            -F "mobile-arm64_v8a-ok.apk=@mobile-arm64_v8a-ok.apk" \
+            -F "mobile-armeabi_v7a-ok.apk=@mobile-armeabi_v7a-ok.apk")
+          echo "Telegram 响应: $response"
 
-      - name: Push Standard APKs to Telegram
+      - name: 推送 Pro 版到 Telegram
         if: steps.check.outputs.changed == 'true'
         env:
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
-          BOT_API_BASE: ${{ secrets.BOT_API_BASE }}
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+          BOT_API_BASE: ${{ secrets.TELEGRAM_API_BASE }}
         run: |
+          cd apk
           media='[
-            {"type":"document","media":"attach://hisense-tv-universal-ok.apk"},
-            {"type":"document","media":"attach://leanback-arm64_v8a-ok.apk"},
-            {"type":"document","media":"attach://leanback-armeabi_v7a-ok.apk"},
-            {"type":"document","media":"attach://mobile-arm64_v8a-ok.apk"},
-            {"type":"document","media":"attach://mobile-armeabi_v7a-ok.apk","caption":"${{ env.caption }}"}
+            {"type":"document", "media":"attach://leanback-armeabi_v7a-pro.apk"},
+            {"type":"document", "media":"attach://leanback-arm64_v8a-pro.apk"},
+            {"type":"document", "media":"attach://mobile-armeabi_v7a-pro.apk"},
+            {"type":"document", "media":"attach://mobile-arm64_v8a-pro.apk", "caption":"'"$(cat ../caption.txt)"'"}
           ]'
-
-          curl -s -X POST "$BOT_API_BASE/bot$BOT_TOKEN/sendMediaGroup" \
+          response=$(curl -s -X POST "$BOT_API_BASE/bot$BOT_TOKEN/sendMediaGroup" \
             -F chat_id="$CHAT_ID" \
             -F media="$media" \
-            -F "hisense-tv-universal-ok.apk=@apk/hisense-tv-universal-ok.apk" \
-            -F "leanback-arm64_v8a-ok.apk=@apk/leanback-arm64_v8a-ok.apk" \
-            -F "leanback-armeabi_v7a-ok.apk=@apk/leanback-armeabi_v7a-ok.apk" \
-            -F "mobile-arm64_v8a-ok.apk=@apk/mobile-arm64_v8a-ok.apk" \
-            -F "mobile-armeabi_v7a-ok.apk=@apk/mobile-armeabi_v7a-ok.apk"
+            -F "leanback-armeabi_v7a-pro.apk=@leanback-armeabi_v7a-pro.apk" \
+            -F "leanback-arm64_v8a-pro.apk=@leanback-arm64_v8a-pro.apk" \
+            -F "mobile-armeabi_v7a-pro.apk=@mobile-armeabi_v7a-pro.apk" \
+            -F "mobile-arm64_v8a-pro.apk=@mobile-arm64_v8a-pro.apk")
+          echo "Telegram 响应: $response"
 
-      - name: Save version
+      - name: 保存版本号
         if: steps.check.outputs.changed == 'true'
         run: |
           cp latest_version.txt last_version.txt
