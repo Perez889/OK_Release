@@ -21,6 +21,7 @@ jobs:
 import os, re, requests
 from urllib.parse import quote
 from datetime import datetime, timezone, timedelta
+import json
 
 BASE_PRO = "https://op.ll.dovx.cf/OK影视/OK影视Pro/"
 BASE_STD = "https://op.ll.dovx.cf/OK影视/OK影视标准版/"
@@ -48,10 +49,10 @@ def fetch_pro():
     version = get_latest_folder(BASE_PRO)
     folder = BASE_PRO + version + "/"
     mapping = {
-        f"OK影视Pro-电视版-32位-{version}.apk": "pro-tv-32.apk",
-        f"OK影视Pro-电视版-64位-{version}.apk": "pro-tv-64.apk",
-        f"OK影视Pro-手机版-{version} - 模拟器.apk": "pro-mobile-emulator.apk",
-        f"OK影视Pro-手机版-{version}.apk": "pro-mobile.apk",
+        f"OK影视Pro-电视版-32位-{version}.apk": "leanback-armeabi_v7a-pro.apk",
+        f"OK影视Pro-电视版-64位-{version}.apk": "leanback-arm64_v8a-pro.apk",
+        f"OK影视Pro-手机版-{version} - 模拟器.apk": "mobile-armeabi_v7a-pro.apk",
+        f"OK影视Pro-手机版-{version}.apk": "mobile-arm64_v8a-pro.apk",
     }
     for src, dst in mapping.items(): download(folder + quote(src), dst)
     return version
@@ -60,45 +61,48 @@ def fetch_standard():
     version = get_latest_folder(BASE_STD)
     folder = BASE_STD + version + "/"
     mapping = {
-        f"海信专版-OK影视-{version}.apk": "hisense-tv-universal.apk",
-        f"leanback-arm64_v8a-{version}.apk": "leanback-arm64_v8a.apk",
-        f"leanback-armeabi_v7a-{version}.apk": "leanback-armeabi_v7a.apk",
-        f"mobile-arm64_v8a-{version}.apk": "mobile-arm64_v8a.apk",
-        f"mobile-armeabi_v7a-{version}.apk": "mobile-armeabi_v7a.apk",
+        f"海信专版-OK影视-{version}.apk": "hisense-tv-universal-ok.apk",
+        f"leanback-arm64_v8a-{version}.apk": "leanback-arm64_v8a-ok.apk",
+        f"leanback-armeabi_v7a-{version}.apk": "leanback-armeabi_v7a-ok.apk",
+        f"mobile-arm64_v8a-{version}.apk": "mobile-arm64_v8a-ok.apk",
+        f"mobile-armeabi_v7a-{version}.apk": "mobile-armeabi_v7a-ok.apk",
     }
     for src, dst in mapping.items(): download(folder + quote(src), dst)
     return version
 
 def fetch_update_log(std_version, pro_version):
-    # 标准版日志
-    std_url = f"{BASE_STD}{std_version}/标准版{std_version}.txt"
-    r_std = session.get(std_url, timeout=30)
-    std_logs = r_std.text.strip().splitlines() if r_std.status_code == 200 else []
+    # 下载 FongMi JSON 日志
+    def fetch_json(url):
+        r = requests.get(url, timeout=30)
+        if r.status_code == 200:
+            return r.json()
+        return {}
 
-    # Pro版日志（尝试用同一 txt 结构）
-    pro_url = f"{BASE_PRO}{pro_version}/Pro版{pro_version}.txt"
-    r_pro = session.get(pro_url, timeout=30)
-    pro_logs = r_pro.text.strip().splitlines() if r_pro.status_code == 200 else []
+    leanback_json = fetch_json("https://raw.githubusercontent.com/FongMi/Release/fongmi/apk/leanback.json")
+    mobile_json = fetch_json("https://raw.githubusercontent.com/FongMi/Release/fongmi/apk/mobile.json")
 
-    # 合并、去重、添加 • 前缀
-    merged = list(sorted(set([f"• {l.lstrip('*').strip()}" for l in std_logs + pro_logs if l.strip()])))
-    return "\n".join(merged) if merged else "暂无更新日志"
+    desc_leanback = leanback_json.get("desc","")
+    desc_mobile = mobile_json.get("desc","")
+    logs = list(sorted(set(desc_leanback.splitlines() + desc_mobile.splitlines())))
+    logs = [f"• {l.lstrip('*').strip()}" for l in logs if l.strip()]
+    return "\n".join(logs) if logs else "暂无更新日志"
 
 def generate_caption(std_v, pro_v, logs):
     beijing = datetime.now(timezone(timedelta(hours=8)))
     time_str = beijing.strftime("%Y/%m/%d %H:%M")
     caption = f"""
-OK影视自动更新
+- 影视 · 蜂蜜版
 
-本次更新：
+- 本次更新：
 {logs}
 
-标准版：{std_v}
-Pro版：{pro_v}
-更新时间：{time_str}
+- 标准版：{std_v}
+- Pro版：{pro_v}
+- 更新时间：{time_str}
 """.strip()
-    with open("caption.txt", "w", encoding="utf-8") as f: f.write(caption)
-    with open("latest_version.txt", "w") as f: f.write(f"Pro:{pro_v}\nStd:{std_v}")
+    with open("caption.txt","w",encoding="utf-8") as f: f.write(caption)
+    with open("latest_version.txt","w",encoding="utf-8") as f:
+        f.write(f"Pro:{pro_v}\nStd:{std_v}")
     print(caption)
 
 def main():
@@ -106,7 +110,7 @@ def main():
     std_v = fetch_standard()
     logs = fetch_update_log(std_v, pro_v)
     generate_caption(std_v, pro_v, logs)
-    print("全部完成")
+    print("完成")
 
 if __name__ == "__main__": main()
 EOF
@@ -143,7 +147,7 @@ EOF
             {"type":"document","media":"attach://leanback-armeabi_v7a-pro.apk"},
             {"type":"document","media":"attach://leanback-arm64_v8a-pro.apk"},
             {"type":"document","media":"attach://mobile-armeabi_v7a-pro.apk"},
-            {"type":"document","media":"attach://mobile-arm64_v8a-pro.apk", "caption":"${{ env.caption }}"}
+            {"type":"document","media":"attach://mobile-arm64_v8a-pro.apk","caption":"${{ env.caption }}"}
           ]'
 
           curl -s -X POST "$BOT_API_BASE/bot$BOT_TOKEN/sendMediaGroup" \
@@ -162,17 +166,17 @@ EOF
           BOT_API_BASE: ${{ secrets.BOT_API_BASE }}
         run: |
           media='[
-            {"type":"document","media":"attach://hisense-tv-universal.apk"},
+            {"type":"document","media":"attach://hisense-tv-universal-ok.apk"},
             {"type":"document","media":"attach://leanback-arm64_v8a-ok.apk"},
             {"type":"document","media":"attach://leanback-armeabi_v7a-ok.apk"},
             {"type":"document","media":"attach://mobile-arm64_v8a-ok.apk"},
-            {"type":"document","media":"attach://mobile-armeabi_v7a-ok.apk", "caption":"${{ env.caption }}"}
+            {"type":"document","media":"attach://mobile-armeabi_v7a-ok.apk","caption":"${{ env.caption }}"}
           ]'
 
           curl -s -X POST "$BOT_API_BASE/bot$BOT_TOKEN/sendMediaGroup" \
             -F chat_id="$CHAT_ID" \
             -F media="$media" \
-            -F "hisense-tv-universal-ok.apk=@apk/hisense-tv-universal.apk" \
+            -F "hisense-tv-universal-ok.apk=@apk/hisense-tv-universal-ok.apk" \
             -F "leanback-arm64_v8a-ok.apk=@apk/leanback-arm64_v8a-ok.apk" \
             -F "leanback-armeabi_v7a-ok.apk=@apk/leanback-armeabi_v7a-ok.apk" \
             -F "mobile-arm64_v8a-ok.apk=@apk/mobile-arm64_v8a-ok.apk" \
